@@ -65,10 +65,12 @@ do
   local callno, payloadno = 0, 0
   local counts = {}
 
+  local closed = false
   local function wlog(s)
+    if closed then return end
     flog:write(fmt("[%8.3f] %s\n", os_clock() - t0, s)); flog:flush()
   end
-  local function wrecon(s) frecon:write(s, "\n"); frecon:flush() end
+  local function wrecon(s) if closed then return end frecon:write(s, "\n"); frecon:flush() end
 
   -- ---------------------------- CONSTANTES ----------------------------------
   local CONST = { TYPE = {}, SIGN = {}, REGION = {}, LOAD = {}, SAVE = {}, POINTER = {}, PROT = {}, ASM = {}, FREEZE = {} }
@@ -335,6 +337,6 @@ do
     wlog("O script original terminou com erro: " .. tostring(e))
     summary("erro: " .. tostring(e))
   end
-  flog:close(); frecon:close()
+  closed = true; flog:close(); frecon:close()
   gg_alert("GG Spy: concluído.\n\nLog: " .. F_LOG .. "\nScript reconstruído: " .. F_RECON)
 end
