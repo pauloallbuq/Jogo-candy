@@ -50,7 +50,7 @@ const $=x=>document.getElementById(x);
 let current='findings',reportData=null,formatted='',loadedBytes=null,saveName='lua-formatado.lua';
 const ops={
 '5.1':'MOVE LOADK LOADBOOL LOADNIL GETUPVAL GETGLOBAL GETTABLE SETGLOBAL SETUPVAL SETTABLE NEWTABLE SELF ADD SUB MUL DIV MOD POW UNM NOT LEN CONCAT JMP EQ LT LE TEST TESTSET CALL TAILCALL RETURN FORLOOP FORPREP TFORLOOP SETLIST CLOSE CLOSURE VARARG'.split(' '),
-'5.2':'MOVE LOADK LOADKX LOADBOOL LOADNIL GETUPVAL GETTABUP GETTABLE SETTABUP SETUPVAL SETTABLE NEWTABLE SELF ADD SUB MUL DIV MOD POW UNM NOT LEN CONCAT JMP EQ LT LE TEST TESTSET CALL TAILCALL RETURN FORLOOP FORPREP TFORCALL TFORLOOP SETLIST CLOSURE VARARG EXTRAARG'.split(' '),
+'5.2':'MOVE LOADK LOADKX LOADBOOL LOADNIL GETUPVAL GETTABUP GETTABLE SETTABUP SETUPVAL SETTABLE NEWTABLE SELF ADD SUB MUL DIV MOD POW UNM NOT LEN CONCAT JMP EQ LT LE TEST TESTSET CALL TAILCALL RETURN FORLOOP FORPREP TFORCALL TFORLOOP SETLIST CLOSURE VARARG EXTRAARG EXT40 BNOT BAND BOR BXOR SHL SHR'.split(' '),
 '5.3':'MOVE LOADK LOADKX LOADBOOL LOADNIL GETUPVAL GETTABUP GETTABLE SETTABUP SETUPVAL SETTABLE NEWTABLE SELF ADD SUB MUL MOD POW DIV IDIV BAND BOR BXOR SHL SHR UNM BNOT NOT LEN CONCAT JMP EQ LT LE TEST TESTSET CALL TAILCALL RETURN FORLOOP FORPREP TFORCALL TFORLOOP SETLIST CLOSURE VARARG EXTRAARG'.split(' '),
 '5.4':'MOVE LOADI LOADF LOADK LOADKX LOADFALSE LFALSESKIP LOADTRUE LOADNIL GETUPVAL SETUPVAL GETTABUP GETTABLE GETI GETFIELD SETTABUP SETTABLE SETI SETFIELD NEWTABLE SELF ADDI ADDK SUBK MULK MODK POWK DIVK IDIVK BANDK BORK BXORK SHRI SHLI ADD SUB MUL MOD POW DIV IDIV BAND BOR BXOR SHL SHR MMBIN MMBINI MMBINK UNM BNOT NOT LEN CONCAT CLOSE TBC JMP EQ LT LE EQK EQI LTI LEI GTI GEI TEST TESTSET CALL TAILCALL RETURN RETURN0 RETURN1 FORLOOP FORPREP TFORPREP TFORCALL TFORLOOP SETLIST CLOSURE VARARG VARARGPREP EXTRAARG'.split(' ')
 };
@@ -451,8 +451,17 @@ function parseLuac(b){
   r.u8(); // sizeupvalues da função principal
  }
  if(info.format!==0)info.warnings.push('formato '+info.format+' ≠ 0: bytecode possivelmente de VM customizada');
- Object.assign(info,{le:r.le,szInt:r.szInt,szT:r.szT,szI:r.szI,szN:r.szN,szInteger:r.szInteger,integral:r.integral});
- const main=readFunc(r,ver,null,0);
+ Object.assign(info,{le:r.le,szInt:r.szInt,szT:r.szT,szI:r.szI,szInteger:r.szInteger,integral:r.integral});
+ const start=r.p,declN=r.szN;let main;
+ try{main=readFunc(r,ver,null,0);if(r.p!==b.length&&!r.integral)throw new Error('sobra de bytes')}
+ catch(e){
+  // cabeçalho adulterado? tenta tamanhos alternativos de lua_Number (comum em scripts protegidos)
+  let ok=false;
+  for(const alt of [8,4]){if(alt===declN)continue;r.szN=alt;r.p=start;try{main=readFunc(r,ver,null,0);if(r.p===b.length){ok=true;info.warnings.push(`Cabeçalho declara lua_Number=${declN} bytes, mas o arquivo só é consistente com ${alt}: cabeçalho adulterado (anti-análise). Corrigido automaticamente.`);break}}catch(e2){}}
+  if(!ok){r.szN=declN;r.p=start;main=readFunc(r,ver,null,0)}
+ }
+ info.szN=r.szN;
+ if(ver==='5.2'){let ext=false;(function w(f){if(f.code.some(x=>(x&0x3f)>=40))ext=true;f.protos.forEach(w)})(main);if(ext)info.warnings.push('Há opcodes ≥ 40, inexistentes no Lua 5.2 padrão: extensão de VM (ex.: GameGuardian). Nomes EXT40/BNOT/BAND/BOR/BXOR/SHL/SHR são INFERIDOS pelo contexto (ex.: laço de CRC32), não confirmados.')}
  info.trailing=b.length-r.p;
  if(info.trailing>0)info.warnings.push(info.trailing+' byte(s) sobrando após a função principal');
  return {info,main,ver};

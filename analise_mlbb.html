@@ -1,0 +1,3226 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Análise MLBB Lua</title>
+<style>:root{color-scheme:dark;--bg:#0b1020;--p:#121c30;--line:#293953;--txt:#e9f0fc;--muted:#9aabc4;--g:#a8e66b;--y:#f2c875;--r:#ff9292}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 system-ui,Segoe UI,Arial}main{max-width:1000px;margin:auto;padding:24px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:17px;margin:30px 0 8px;color:var(--g)}p,li{color:#d3deee}.muted{color:var(--muted);font-size:13px}
+.card{background:var(--p);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:10px 0}.ok{border-left:4px solid var(--g)}.warn{border-left:4px solid var(--y)}.bad{border-left:4px solid var(--r)}
+code{background:#0b1424;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12px;word-break:break-all}
+details{background:var(--p);border:1px solid var(--line);border-radius:10px;margin:6px 0}summary{cursor:pointer;padding:9px 12px;font-weight:600}
+pre{margin:0;padding:12px;overflow:auto;background:#09111f;font:12px/1.55 ui-monospace,Consolas,monospace;max-height:520px;white-space:pre}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;font-size:13px}th{color:var(--g)}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;margin-right:6px}.t-c{background:#27431f;color:#c8f29a}.t-i{background:#4a3a1e;color:#f5d48e}.t-n{background:#49282e;color:#ffb2b2}</style></head><body><main>
+<h1>Análise de <code>com.mobile.legends.lua</code></h1>
+<p class="muted">Desmontagem e leitura estática com o Lua Inspector Pro. Cada afirmação está marcada: <span class="tag t-c">confirmado</span> lido direto do arquivo, <span class="tag t-i">inferido</span> deduzido do contexto, <span class="tag t-n">não resolvido</span>.</p>
+
+<div class="card bad"><b>Resultado honesto:</b> não consegui reconstruir o código-fonte nem decifrar as strings desse script. Ele é um script de GameGuardian protegido por um ofuscador pesado, que só funciona no ambiente real do GameGuardian. Abaixo está tudo o que foi possível provar, e o que falta.</div>
+
+<h2>1. O que é o arquivo</h2>
+<div class="card ok"><span class="tag t-c">confirmado</span> Bytecode Lua 5.2 compilado (não é texto), 15.563 bytes, 17 funções, 2.444 instruções, 492 constantes, sem nomes de variáveis nem números de linha (stripped).</div>
+<div class="card ok"><span class="tag t-c">confirmado</span> O nome <code>com.mobile.legends</code> é o pacote Android do Mobile Legends: o script foi feito para rodar no GameGuardian sobre esse jogo.</div>
+
+<h2>2. Camadas de proteção encontradas</h2>
+<div class="card warn"><b>Cabeçalho adulterado.</b> <span class="tag t-c">confirmado</span> O cabeçalho diz que <code>lua_Number</code> tem 4 bytes, mas o conteúdo só fecha (o arquivo termina exatamente no fim da função principal) com 8 bytes. Isso quebra desmontadores comuns como o luac e o unluac. O Lua Inspector agora detecta e corrige isso sozinho.</div>
+<div class="card warn"><b>Opcodes fora do padrão.</b> <span class="tag t-c">confirmado</span> Existem instruções 41, 42, 44 e 46, que não existem no Lua 5.2 oficial. <span class="tag t-i">inferido</span> São operações bit a bit (NOT, AND, XOR, shift à direita): aparecem no laço de CRC32, com o polinômio <code>3988292384</code> (0xEDB88320) e a máscara <code>4294967295</code> (0xFFFFFFFF).</div>
+<div class="card warn"><b>Verificação de integridade (CRC32).</b> <span class="tag t-c">confirmado</span> A função <code>main/2</code> monta a tabela de CRC32, calcula um CRC, formata com <code>%08X</code> e compara com a string <code>"A3E0D35B"</code>; se for diferente, a função retorna e o script não continua. <span class="tag t-n">não resolvido</span> Não determinei exatamente quais dados entram no CRC.</div>
+<div class="card warn"><b>Impressão digital do ambiente.</b> <span class="tag t-c">confirmado</span> O script apaga <code>_ENV._G</code>, percorre o ambiente com <code>next</code> e guarda as chaves por posição de iteração. <span class="tag t-i">inferido</span> Ele espera que 10 posições específicas (4ª, 6ª, 11ª, 15ª a 19ª, 25ª e 28ª) sejam tabelas, as bibliotecas padrão e a <code>gg</code>, e depois pega os 35 primeiros valores globais por posição. Isso depende da ordem de iteração do Lua do GameGuardian, por isso o script falha fora dele: em um Lua comum ele cai em loop ou em erro.</div>
+<div class="card warn"><b>Strings e nomes cifrados.</b> <span class="tag t-c">confirmado</span> O código real está em <code>main/4</code> (512 instruções, 84 constantes). Os textos aparecem como strings cifradas e os nomes de funções como chaves aleatórias. O decodificador usa os padrões Lua <code>%l%u%a+%d+hN?</code> e <code>([%l]?)(%u)</code>.</div>
+
+<h2>3. Mapa das funções</h2>
+<table><tr><th>Função</th><th>Papel</th><th>Status</th></tr>
+<tr><td>main</td><td>Monta a tabela de 256 caracteres (<code>"\000".."\255"</code>), uma permutação de 90 números (1173–1262), a impressão digital do ambiente, e no fim chama <code>main/4</code></td><td><span class="tag t-c">confirmado</span></td></tr>
+<tr><td>main/0</td><td>Wrapper que repassa os argumentos e restaura ~27 variáveis capturadas</td><td><span class="tag t-i">inferido</span></td></tr>
+<tr><td>main/1</td><td>Concatena argumentos numa string acumuladora (provável <code>print</code> interno)</td><td><span class="tag t-i">inferido</span></td></tr>
+<tr><td>main/2</td><td>Anti-adulteração: CRC32, compara com <code>"A3E0D35B"</code>; define o decodificador de strings</td><td><span class="tag t-c">confirmado</span></td></tr>
+<tr><td>main/2/0…7</td><td>Auxiliares do decodificador (cache, índices, conversão)</td><td><span class="tag t-i">inferido</span></td></tr>
+<tr><td>main/3</td><td>Cria o objeto/proxy que serve de decodificador para <code>main/4</code></td><td><span class="tag t-i">inferido</span></td></tr>
+<tr><td>main/4</td><td>O script real (menu e lógica do GameGuardian)</td><td><span class="tag t-n">não decifrado</span></td></tr></table>
+
+<h2>4. O que dá para ver do script real (<code>main/4</code>)</h2>
+<div class="card"><span class="tag t-c">confirmado</span> Strings em claro nas constantes de todo o arquivo: <code>gg</code>, <code>address</code>, <code>flags</code>, <code>next</code>, <code>match</code>, <code>print</code>, <code>loadfile</code>, <code>_G</code>. Os campos <code>address</code> e <code>flags</code> são os de resultados de busca de memória do GameGuardian (<code>gg.getResults</code>). A presença de <code>loadfile</code> sugere leitura de outro arquivo Lua.</div>
+<div class="card"><span class="tag t-c">confirmado</span> 17 chaves aleatórias de 6 letras (nomes ofuscados de funções/globais): <code>&quot;lghdyq&quot;</code> <code>&quot;vqpmvv&quot;</code> <code>&quot;txfqii&quot;</code> <code>&quot;ppoeoo&quot;</code> <code>&quot;pbtuse&quot;</code> <code>&quot;toxntx&quot;</code> <code>&quot;idcysm&quot;</code> <code>&quot;tdxxlx&quot;</code> <code>&quot;ofnqtu&quot;</code> <code>&quot;zhyhnq&quot;</code> <code>&quot;oimcon&quot;</code> <code>&quot;qoyknd&quot;</code> <code>&quot;nwsabl&quot;</code> <code>&quot;gtbikp&quot;</code> <code>&quot;jqzgou&quot;</code> <code>&quot;qymhxi&quot;</code> <code>&quot;zzyevv&quot;</code> </div>
+<div class="card"><span class="tag t-c">confirmado</span> 47 strings cifradas (a numeração <code>…Nh</code> parece indicar a ordem de uso): <code>&quot;fXZIhCfVQZ&quot;</code> <code>&quot;gJEiBgHiFK2h&quot;</code> <code>&quot;gBfPRiAfRPgAfVQZiAfQZXZOYLiAfQJgD3h&quot;</code> <code>&quot;gQfZOgDfRZiO4h&quot;</code> <code>&quot;fIP5h&quot;</code> <code>&quot;hAFgQViOhDJgXhFiOgVfWWVgBfVgDfQ6h&quot;</code> <code>&quot;iB7h&quot;</code> <code>&quot;iAfMgDfLLHPKY8h&quot;</code> <code>&quot;gSDfLLHPKYhO9h&quot;</code> <code>&quot;fIZEI10h&quot;</code> <code>&quot;hBfOMJIiOfMgDfLLHPKYiP11h&quot;</code> <code>&quot;fMKPRMI12h&quot;</code> <code>&quot;bCdWQaRcSeJiOgQfZiDfZOgDAfQZiOhAfVXUiOhHgDfRZKgDbCdWQaRcSeJiOjKhEfKPOZiOgMfVZHhOgJiDhZVPZVgH13h&quot;</code> <code>&quot;gKiDfKgDfF14h&quot;</code> <code>&quot;hHfQVgBfTiOhDDiOhNiOgVU15h&quot;</code> <code>&quot;fOJRgAfZK16h&quot;</code> <code>&quot;gBfUZgBfTgAfPE17h&quot;</code> <code>&quot;fVLgMfVLVgAfQZ18h&quot;</code> <code>&quot;hY19h&quot;</code> <code>&quot;fLZIgQDfOXZL20h&quot;</code> <code>&quot;gQhFDBgVUFhJgUVULXVPR21h&quot;</code> <code>&quot;gBfQZgDfKgQfZLJQIL22h&quot;</code> <code>&quot;hEfPOZ23h&quot;</code> <code>&quot;iDhZiChZZUiChSTQiChWXZ24h&quot;</code> <code>&quot;fXZIgQfZLJQIL25h&quot;</code> <code>&quot;fXZIgQfZLJQILhHfPJOI26h&quot;</code> <code>&quot;fXZIgMDfQJZL27h&quot;</code> <code>&quot;gDfYYKZLL28h&quot;</code> <code>&quot;hYfEhZU43hN&quot;</code> <code>&quot;gOLShFgFhEgNVQhE29h&quot;</code> <code>&quot;hYfEhZY44hN&quot;</code> <code>&quot;hYfEhYH45hN&quot;</code> <code>&quot;fGgDfQJZ30h&quot;</code> <code>&quot;iOhAgDBfT31h&quot;</code> <code>&quot;fWKZZCZ32h&quot;</code> <code>&quot;hYYYYYY33h&quot;</code> <code>&quot;gDfYYgWfVLIhBfIZRL34h&quot;</code> <code>&quot;fKZRPGZgWfVLIhBfIZRL35h&quot;</code> <code>&quot;fIPgDfLI36h&quot;</code> <code>&quot;hUiChVZYiChQYViChXQQiChURWiChWTViChTWX37h&quot;</code> <code>&quot;hYfEhQ46hN&quot;</code> <code>&quot;fWQgDfXL38h&quot;</code> <code>&quot;gKiDgQDfFiOhJgBfIVGZ39h&quot;</code> <code>&quot;gKiDgQDfFiOgVfWW40h&quot;</code> <code>&quot;hYfEhU47hN&quot;</code> <code>&quot;fQPgDfYgQfZLJQIL41h&quot;</code> <code>&quot;gMfZKLVPOiOhZZiAhRiAhY42h&quot;</code> </div>
+<div class="card"><span class="tag t-i">inferido</span> O início do script chama o decodificador com o índice 1 e a string <code>"fXZIhCfVQZ"</code>; conforme o resultado, executa uma função de chave <code>lghdyq</code> e usa <code>match</code> sobre o resultado. Em seguida chama a função de chave <code>pbtuse</code> com <code>false</code>, que pelo padrão de uso parece ser <code>gg.setVisible(false)</code> (esconder a interface). Isso não foi provado.</div>
+
+<h2>5. O que eu tentei e por que não funcionou</h2>
+<ul><li>Compilei um Lua 5.2 modificado com os opcodes extras e com leitura de <code>size_t</code> de 4 bytes. O script carrega e executa até a verificação do ambiente.</li>
+<li>Para o script avançar, o ambiente precisa ter a mesma ordem de iteração do GameGuardian real. Com uma ordem inventada, o script usa funções erradas e entra em loop. Não há como descobrir essa ordem só pelo arquivo.</li>
+<li>Por isso as strings cifradas não foram decodificadas, e eu não vou inventar o código do menu.</li></ul>
+
+<h2>6. Como chegar nos 100%</h2>
+<div class="card ok">A forma confiável é <b>observar o script rodando no GameGuardian real</b>: um pequeno script “espião”, executado antes dele, que registra cada chamada <code>gg.*</code> (textos de menu, valores buscados, endereços editados) sem alterar a memória. Isso revela o comportamento sem precisar quebrar a cifra. Posso escrever esse espião se você quiser.</div>
+
+<h2>7. Desmontagem completa</h2>
+<p class="muted">Gerada pelo Lua Inspector Pro (opcodes 41, 42, 44 e 46 aparecem como OP_xx ou nomes inferidos). Clique para abrir cada função.</p>
+<details><summary>função main · ?:0-0 · 857 instruções</summary><pre>=== função main · ?:0-0 · 857 instruções ===
+params=0 vararg=1 slots=150 upvalues=1 constantes=359 funções=5
+    1  [   -]  LOADNIL    0 2
+    2  [   -]  NEWTABLE   3 48 1
+    3  [   -]  SETTABLE   3 256 257     ; B=0 C=&quot;\000&quot;
+    4  [   -]  LOADK      4 2           ; &quot;\001&quot;
+    5  [   -]  LOADK      5 3           ; &quot;\002&quot;
+    6  [   -]  LOADK      6 4           ; &quot;\003&quot;
+    7  [   -]  LOADK      7 5           ; &quot;\004&quot;
+    8  [   -]  LOADK      8 6           ; &quot;\005&quot;
+    9  [   -]  LOADK      9 7           ; &quot;\006&quot;
+   10  [   -]  LOADK      10 8          ; &quot;\007&quot;
+   11  [   -]  LOADK      11 9          ; &quot;\008&quot;
+   12  [   -]  LOADK      12 10         ; &quot;\t&quot;
+   13  [   -]  LOADK      13 11         ; &quot;\n&quot;
+   14  [   -]  LOADK      14 12         ; &quot;\011&quot;
+   15  [   -]  LOADK      15 13         ; &quot;\012&quot;
+   16  [   -]  LOADK      16 14         ; &quot;\r&quot;
+   17  [   -]  LOADK      17 15         ; &quot;\014&quot;
+   18  [   -]  LOADK      18 16         ; &quot;\015&quot;
+   19  [   -]  LOADK      19 17         ; &quot;\016&quot;
+   20  [   -]  LOADK      20 18         ; &quot;\017&quot;
+   21  [   -]  LOADK      21 19         ; &quot;\018&quot;
+   22  [   -]  LOADK      22 20         ; &quot;\019&quot;
+   23  [   -]  LOADK      23 21         ; &quot;\020&quot;
+   24  [   -]  LOADK      24 22         ; &quot;\021&quot;
+   25  [   -]  LOADK      25 23         ; &quot;\022&quot;
+   26  [   -]  LOADK      26 24         ; &quot;\023&quot;
+   27  [   -]  LOADK      27 25         ; &quot;\024&quot;
+   28  [   -]  LOADK      28 26         ; &quot;\025&quot;
+   29  [   -]  LOADK      29 27         ; &quot;\026&quot;
+   30  [   -]  LOADK      30 28         ; &quot;\027&quot;
+   31  [   -]  LOADK      31 29         ; &quot;\028&quot;
+   32  [   -]  LOADK      32 30         ; &quot;\029&quot;
+   33  [   -]  LOADK      33 31         ; &quot;\030&quot;
+   34  [   -]  LOADK      34 32         ; &quot;\031&quot;
+   35  [   -]  LOADK      35 33         ; &quot; &quot;
+   36  [   -]  LOADK      36 34         ; &quot;!&quot;
+   37  [   -]  LOADK      37 35         ; &quot;\&quot;&quot;
+   38  [   -]  LOADK      38 36         ; &quot;#&quot;
+   39  [   -]  LOADK      39 37         ; &quot;$&quot;
+   40  [   -]  LOADK      40 38         ; &quot;%&quot;
+   41  [   -]  LOADK      41 39         ; &quot;&amp;&quot;
+   42  [   -]  LOADK      42 40         ; &quot;&#x27;&quot;
+   43  [   -]  LOADK      43 41         ; &quot;(&quot;
+   44  [   -]  LOADK      44 42         ; &quot;)&quot;
+   45  [   -]  LOADK      45 43         ; &quot;*&quot;
+   46  [   -]  LOADK      46 44         ; &quot;+&quot;
+   47  [   -]  LOADK      47 45         ; &quot;,&quot;
+   48  [   -]  LOADK      48 46         ; &quot;-&quot;
+   49  [   -]  LOADK      49 47         ; &quot;.&quot;
+   50  [   -]  LOADK      50 48         ; &quot;/&quot;
+   51  [   -]  LOADK      51 49         ; &quot;0&quot;
+   52  [   -]  LOADK      52 50         ; &quot;1&quot;
+   53  [   -]  LOADK      53 51         ; &quot;2&quot;
+   54  [   -]  SETLIST    3 50 1
+   55  [   -]  LOADK      4 52          ; &quot;3&quot;
+   56  [   -]  LOADK      5 53          ; &quot;4&quot;
+   57  [   -]  LOADK      6 54          ; &quot;5&quot;
+   58  [   -]  LOADK      7 55          ; &quot;6&quot;
+   59  [   -]  LOADK      8 56          ; &quot;7&quot;
+   60  [   -]  LOADK      9 57          ; &quot;8&quot;
+   61  [   -]  LOADK      10 58         ; &quot;9&quot;
+   62  [   -]  LOADK      11 59         ; &quot;:&quot;
+   63  [   -]  LOADK      12 60         ; &quot;;&quot;
+   64  [   -]  LOADK      13 61         ; &quot;&lt;&quot;
+   65  [   -]  LOADK      14 62         ; &quot;=&quot;
+   66  [   -]  LOADK      15 63         ; &quot;&gt;&quot;
+   67  [   -]  LOADK      16 64         ; &quot;?&quot;
+   68  [   -]  LOADK      17 65         ; &quot;@&quot;
+   69  [   -]  LOADK      18 66         ; &quot;A&quot;
+   70  [   -]  LOADK      19 67         ; &quot;B&quot;
+   71  [   -]  LOADK      20 68         ; &quot;C&quot;
+   72  [   -]  LOADK      21 69         ; &quot;D&quot;
+   73  [   -]  LOADK      22 70         ; &quot;E&quot;
+   74  [   -]  LOADK      23 71         ; &quot;F&quot;
+   75  [   -]  LOADK      24 72         ; &quot;G&quot;
+   76  [   -]  LOADK      25 73         ; &quot;H&quot;
+   77  [   -]  LOADK      26 74         ; &quot;I&quot;
+   78  [   -]  LOADK      27 75         ; &quot;J&quot;
+   79  [   -]  LOADK      28 76         ; &quot;K&quot;
+   80  [   -]  LOADK      29 77         ; &quot;L&quot;
+   81  [   -]  LOADK      30 78         ; &quot;M&quot;
+   82  [   -]  LOADK      31 79         ; &quot;N&quot;
+   83  [   -]  LOADK      32 80         ; &quot;O&quot;
+   84  [   -]  LOADK      33 81         ; &quot;P&quot;
+   85  [   -]  LOADK      34 82         ; &quot;Q&quot;
+   86  [   -]  LOADK      35 83         ; &quot;R&quot;
+   87  [   -]  LOADK      36 84         ; &quot;S&quot;
+   88  [   -]  LOADK      37 85         ; &quot;T&quot;
+   89  [   -]  LOADK      38 86         ; &quot;U&quot;
+   90  [   -]  LOADK      39 87         ; &quot;V&quot;
+   91  [   -]  LOADK      40 88         ; &quot;W&quot;
+   92  [   -]  LOADK      41 89         ; &quot;X&quot;
+   93  [   -]  LOADK      42 90         ; &quot;Y&quot;
+   94  [   -]  LOADK      43 91         ; &quot;Z&quot;
+   95  [   -]  LOADK      44 92         ; &quot;[&quot;
+   96  [   -]  LOADK      45 93         ; &quot;\\&quot;
+   97  [   -]  LOADK      46 94         ; &quot;]&quot;
+   98  [   -]  LOADK      47 95         ; &quot;^&quot;
+   99  [   -]  LOADK      48 96         ; &quot;_&quot;
+  100  [   -]  LOADK      49 97         ; &quot;`&quot;
+  101  [   -]  LOADK      50 98         ; &quot;a&quot;
+  102  [   -]  LOADK      51 99         ; &quot;b&quot;
+  103  [   -]  LOADK      52 100        ; &quot;c&quot;
+  104  [   -]  LOADK      53 101        ; &quot;d&quot;
+  105  [   -]  SETLIST    3 50 2
+  106  [   -]  LOADK      4 102         ; &quot;e&quot;
+  107  [   -]  LOADK      5 103         ; &quot;f&quot;
+  108  [   -]  LOADK      6 104         ; &quot;g&quot;
+  109  [   -]  LOADK      7 105         ; &quot;h&quot;
+  110  [   -]  LOADK      8 106         ; &quot;i&quot;
+  111  [   -]  LOADK      9 107         ; &quot;j&quot;
+  112  [   -]  LOADK      10 108        ; &quot;k&quot;
+  113  [   -]  LOADK      11 109        ; &quot;l&quot;
+  114  [   -]  LOADK      12 110        ; &quot;m&quot;
+  115  [   -]  LOADK      13 111        ; &quot;n&quot;
+  116  [   -]  LOADK      14 112        ; &quot;o&quot;
+  117  [   -]  LOADK      15 113        ; &quot;p&quot;
+  118  [   -]  LOADK      16 114        ; &quot;q&quot;
+  119  [   -]  LOADK      17 115        ; &quot;r&quot;
+  120  [   -]  LOADK      18 116        ; &quot;s&quot;
+  121  [   -]  LOADK      19 117        ; &quot;t&quot;
+  122  [   -]  LOADK      20 118        ; &quot;u&quot;
+  123  [   -]  LOADK      21 119        ; &quot;v&quot;
+  124  [   -]  LOADK      22 120        ; &quot;w&quot;
+  125  [   -]  LOADK      23 121        ; &quot;x&quot;
+  126  [   -]  LOADK      24 122        ; &quot;y&quot;
+  127  [   -]  LOADK      25 123        ; &quot;z&quot;
+  128  [   -]  LOADK      26 124        ; &quot;{&quot;
+  129  [   -]  LOADK      27 125        ; &quot;|&quot;
+  130  [   -]  LOADK      28 126        ; &quot;}&quot;
+  131  [   -]  LOADK      29 127        ; &quot;~&quot;
+  132  [   -]  LOADK      30 128        ; &quot;\127&quot;
+  133  [   -]  LOADK      31 129        ; &quot;\128&quot;
+  134  [   -]  LOADK      32 130        ; &quot;\129&quot;
+  135  [   -]  LOADK      33 131        ; &quot;\130&quot;
+  136  [   -]  LOADK      34 132        ; &quot;\131&quot;
+  137  [   -]  LOADK      35 133        ; &quot;\132&quot;
+  138  [   -]  LOADK      36 134        ; &quot;\133&quot;
+  139  [   -]  LOADK      37 135        ; &quot;\134&quot;
+  140  [   -]  LOADK      38 136        ; &quot;\135&quot;
+  141  [   -]  LOADK      39 137        ; &quot;\136&quot;
+  142  [   -]  LOADK      40 138        ; &quot;\137&quot;
+  143  [   -]  LOADK      41 139        ; &quot;\138&quot;
+  144  [   -]  LOADK      42 140        ; &quot;\139&quot;
+  145  [   -]  LOADK      43 141        ; &quot;\140&quot;
+  146  [   -]  LOADK      44 142        ; &quot;\141&quot;
+  147  [   -]  LOADK      45 143        ; &quot;\142&quot;
+  148  [   -]  LOADK      46 144        ; &quot;\143&quot;
+  149  [   -]  LOADK      47 145        ; &quot;\144&quot;
+  150  [   -]  LOADK      48 146        ; &quot;\145&quot;
+  151  [   -]  LOADK      49 147        ; &quot;\146&quot;
+  152  [   -]  LOADK      50 148        ; &quot;\147&quot;
+  153  [   -]  LOADK      51 149        ; &quot;\148&quot;
+  154  [   -]  LOADK      52 150        ; &quot;\149&quot;
+  155  [   -]  LOADK      53 151        ; &quot;\150&quot;
+  156  [   -]  SETLIST    3 50 3
+  157  [   -]  LOADK      4 152         ; &quot;\151&quot;
+  158  [   -]  LOADK      5 153         ; &quot;\152&quot;
+  159  [   -]  LOADK      6 154         ; &quot;\153&quot;
+  160  [   -]  LOADK      7 155         ; &quot;\154&quot;
+  161  [   -]  LOADK      8 156         ; &quot;\155&quot;
+  162  [   -]  LOADK      9 157         ; &quot;\156&quot;
+  163  [   -]  LOADK      10 158        ; &quot;\157&quot;
+  164  [   -]  LOADK      11 159        ; &quot;\158&quot;
+  165  [   -]  LOADK      12 160        ; &quot;\159&quot;
+  166  [   -]  LOADK      13 161        ; &quot;\160&quot;
+  167  [   -]  LOADK      14 162        ; &quot;\161&quot;
+  168  [   -]  LOADK      15 163        ; &quot;\162&quot;
+  169  [   -]  LOADK      16 164        ; &quot;\163&quot;
+  170  [   -]  LOADK      17 165        ; &quot;\164&quot;
+  171  [   -]  LOADK      18 166        ; &quot;\165&quot;
+  172  [   -]  LOADK      19 167        ; &quot;\166&quot;
+  173  [   -]  LOADK      20 168        ; &quot;\167&quot;
+  174  [   -]  LOADK      21 169        ; &quot;\168&quot;
+  175  [   -]  LOADK      22 170        ; &quot;\169&quot;
+  176  [   -]  LOADK      23 171        ; &quot;\170&quot;
+  177  [   -]  LOADK      24 172        ; &quot;\171&quot;
+  178  [   -]  LOADK      25 173        ; &quot;\172&quot;
+  179  [   -]  LOADK      26 174        ; &quot;\173&quot;
+  180  [   -]  LOADK      27 175        ; &quot;\174&quot;
+  181  [   -]  LOADK      28 176        ; &quot;\175&quot;
+  182  [   -]  LOADK      29 177        ; &quot;\176&quot;
+  183  [   -]  LOADK      30 178        ; &quot;\177&quot;
+  184  [   -]  LOADK      31 179        ; &quot;\178&quot;
+  185  [   -]  LOADK      32 180        ; &quot;\179&quot;
+  186  [   -]  LOADK      33 181        ; &quot;\180&quot;
+  187  [   -]  LOADK      34 182        ; &quot;\181&quot;
+  188  [   -]  LOADK      35 183        ; &quot;\182&quot;
+  189  [   -]  LOADK      36 184        ; &quot;\183&quot;
+  190  [   -]  LOADK      37 185        ; &quot;\184&quot;
+  191  [   -]  LOADK      38 186        ; &quot;\185&quot;
+  192  [   -]  LOADK      39 187        ; &quot;\186&quot;
+  193  [   -]  LOADK      40 188        ; &quot;\187&quot;
+  194  [   -]  LOADK      41 189        ; &quot;\188&quot;
+  195  [   -]  LOADK      42 190        ; &quot;\189&quot;
+  196  [   -]  LOADK      43 191        ; &quot;\190&quot;
+  197  [   -]  LOADK      44 192        ; &quot;\191&quot;
+  198  [   -]  LOADK      45 193        ; &quot;\192&quot;
+  199  [   -]  LOADK      46 194        ; &quot;\193&quot;
+  200  [   -]  LOADK      47 195        ; &quot;\194&quot;
+  201  [   -]  LOADK      48 196        ; &quot;\195&quot;
+  202  [   -]  LOADK      49 197        ; &quot;\196&quot;
+  203  [   -]  LOADK      50 198        ; &quot;\197&quot;
+  204  [   -]  LOADK      51 199        ; &quot;\198&quot;
+  205  [   -]  LOADK      52 200        ; &quot;\199&quot;
+  206  [   -]  LOADK      53 201        ; &quot;\200&quot;
+  207  [   -]  SETLIST    3 50 4
+  208  [   -]  LOADK      4 202         ; &quot;\201&quot;
+  209  [   -]  LOADK      5 203         ; &quot;\202&quot;
+  210  [   -]  LOADK      6 204         ; &quot;\203&quot;
+  211  [   -]  LOADK      7 205         ; &quot;\204&quot;
+  212  [   -]  LOADK      8 206         ; &quot;\205&quot;
+  213  [   -]  LOADK      9 207         ; &quot;\206&quot;
+  214  [   -]  LOADK      10 208        ; &quot;\207&quot;
+  215  [   -]  LOADK      11 209        ; &quot;\208&quot;
+  216  [   -]  LOADK      12 210        ; &quot;\209&quot;
+  217  [   -]  LOADK      13 211        ; &quot;\210&quot;
+  218  [   -]  LOADK      14 212        ; &quot;\211&quot;
+  219  [   -]  LOADK      15 213        ; &quot;\212&quot;
+  220  [   -]  LOADK      16 214        ; &quot;\213&quot;
+  221  [   -]  LOADK      17 215        ; &quot;\214&quot;
+  222  [   -]  LOADK      18 216        ; &quot;\215&quot;
+  223  [   -]  LOADK      19 217        ; &quot;\216&quot;
+  224  [   -]  LOADK      20 218        ; &quot;\217&quot;
+  225  [   -]  LOADK      21 219        ; &quot;\218&quot;
+  226  [   -]  LOADK      22 220        ; &quot;\219&quot;
+  227  [   -]  LOADK      23 221        ; &quot;\220&quot;
+  228  [   -]  LOADK      24 222        ; &quot;\221&quot;
+  229  [   -]  LOADK      25 223        ; &quot;\222&quot;
+  230  [   -]  LOADK      26 224        ; &quot;\223&quot;
+  231  [   -]  LOADK      27 225        ; &quot;\224&quot;
+  232  [   -]  LOADK      28 226        ; &quot;\225&quot;
+  233  [   -]  LOADK      29 227        ; &quot;\226&quot;
+  234  [   -]  LOADK      30 228        ; &quot;\227&quot;
+  235  [   -]  LOADK      31 229        ; &quot;\228&quot;
+  236  [   -]  LOADK      32 230        ; &quot;\229&quot;
+  237  [   -]  LOADK      33 231        ; &quot;\230&quot;
+  238  [   -]  LOADK      34 232        ; &quot;\231&quot;
+  239  [   -]  LOADK      35 233        ; &quot;\232&quot;
+  240  [   -]  LOADK      36 234        ; &quot;\233&quot;
+  241  [   -]  LOADK      37 235        ; &quot;\234&quot;
+  242  [   -]  LOADK      38 236        ; &quot;\235&quot;
+  243  [   -]  LOADK      39 237        ; &quot;\236&quot;
+  244  [   -]  LOADK      40 238        ; &quot;\237&quot;
+  245  [   -]  LOADK      41 239        ; &quot;\238&quot;
+  246  [   -]  LOADK      42 240        ; &quot;\239&quot;
+  247  [   -]  LOADK      43 241        ; &quot;\240&quot;
+  248  [   -]  LOADK      44 242        ; &quot;\241&quot;
+  249  [   -]  LOADK      45 243        ; &quot;\242&quot;
+  250  [   -]  LOADK      46 244        ; &quot;\243&quot;
+  251  [   -]  LOADK      47 245        ; &quot;\244&quot;
+  252  [   -]  LOADK      48 246        ; &quot;\245&quot;
+  253  [   -]  LOADK      49 247        ; &quot;\246&quot;
+  254  [   -]  LOADK      50 248        ; &quot;\247&quot;
+  255  [   -]  LOADK      51 249        ; &quot;\248&quot;
+  256  [   -]  LOADK      52 250        ; &quot;\249&quot;
+  257  [   -]  LOADK      53 251        ; &quot;\250&quot;
+  258  [   -]  SETLIST    3 50 5
+  259  [   -]  LOADK      4 252         ; &quot;\251&quot;
+  260  [   -]  LOADK      5 253         ; &quot;\252&quot;
+  261  [   -]  LOADK      6 254         ; &quot;\253&quot;
+  262  [   -]  LOADK      7 255         ; &quot;\254&quot;
+  263  [   -]  LOADK      8 256         ; &quot;\255&quot;
+  264  [   -]  SETLIST    3 5 6
+  265  [   -]  NEWTABLE   4 10 0
+  266  [   -]  NEWTABLE   5 9 0
+  267  [   -]  LOADK      6 257         ; 1253
+  268  [   -]  LOADK      7 258         ; 1240
+  269  [   -]  LOADK      8 259         ; 1251
+  270  [   -]  LOADK      9 260         ; 1175
+  271  [   -]  LOADK      10 261        ; 1233
+  272  [   -]  LOADK      11 262        ; 1221
+  273  [   -]  LOADK      12 263        ; 1196
+  274  [   -]  LOADK      13 264        ; 1202
+  275  [   -]  LOADK      14 265        ; 1254
+  276  [   -]  SETLIST    5 9 1
+  277  [   -]  NEWTABLE   6 9 0
+  278  [   -]  LOADK      7 266         ; 1201
+  279  [   -]  LOADK      8 267         ; 1238
+  280  [   -]  LOADK      9 268         ; 1174
+  281  [   -]  LOADK      10 269        ; 1197
+  282  [   -]  LOADK      11 270        ; 1228
+  283  [   -]  LOADK      12 271        ; 1249
+  284  [   -]  LOADK      13 272        ; 1257
+  285  [   -]  LOADK      14 273        ; 1210
+  286  [   -]  LOADK      15 274        ; 1224
+  287  [   -]  SETLIST    6 9 1
+  288  [   -]  NEWTABLE   7 9 0
+  289  [   -]  LOADK      8 275         ; 1239
+  290  [   -]  LOADK      9 276         ; 1183
+  291  [   -]  LOADK      10 277        ; 1179
+  292  [   -]  LOADK      11 278        ; 1214
+  293  [   -]  LOADK      12 279        ; 1198
+  294  [   -]  LOADK      13 280        ; 1184
+  295  [   -]  LOADK      14 281        ; 1220
+  296  [   -]  LOADK      15 282        ; 1247
+  297  [   -]  LOADK      16 283        ; 1204
+  298  [   -]  SETLIST    7 9 1
+  299  [   -]  NEWTABLE   8 9 0
+  300  [   -]  LOADK      9 284         ; 1237
+  301  [   -]  LOADK      10 285        ; 1248
+  302  [   -]  LOADK      11 286        ; 1206
+  303  [   -]  LOADK      12 287        ; 1250
+  304  [   -]  LOADK      13 288        ; 1230
+  305  [   -]  LOADK      14 289        ; 1192
+  306  [   -]  LOADK      15 290        ; 1188
+  307  [   -]  LOADK      16 291        ; 1178
+  308  [   -]  LOADK      17 292        ; 1229
+  309  [   -]  SETLIST    8 9 1
+  310  [   -]  NEWTABLE   9 9 0
+  311  [   -]  LOADK      10 293        ; 1243
+  312  [   -]  LOADK      11 294        ; 1212
+  313  [   -]  LOADK      12 295        ; 1219
+  314  [   -]  LOADK      13 296        ; 1207
+  315  [   -]  LOADK      14 297        ; 1236
+  316  [   -]  LOADK      15 298        ; 1217
+  317  [   -]  LOADK      16 299        ; 1256
+  318  [   -]  LOADK      17 300        ; 1213
+  319  [   -]  LOADK      18 301        ; 1194
+  320  [   -]  SETLIST    9 9 1
+  321  [   -]  NEWTABLE   10 9 0
+  322  [   -]  LOADK      11 302        ; 1227
+  323  [   -]  LOADK      12 303        ; 1234
+  324  [   -]  LOADK      13 304        ; 1225
+  325  [   -]  LOADK      14 305        ; 1262
+  326  [   -]  LOADK      15 306        ; 1215
+  327  [   -]  LOADK      16 307        ; 1241
+  328  [   -]  LOADK      17 308        ; 1232
+  329  [   -]  LOADK      18 309        ; 1181
+  330  [   -]  LOADK      19 310        ; 1223
+  331  [   -]  SETLIST    10 9 1
+  332  [   -]  NEWTABLE   11 9 0
+  333  [   -]  LOADK      12 311        ; 1191
+  334  [   -]  LOADK      13 312        ; 1235
+  335  [   -]  LOADK      14 313        ; 1208
+  336  [   -]  LOADK      15 314        ; 1260
+  337  [   -]  LOADK      16 315        ; 1189
+  338  [   -]  LOADK      17 316        ; 1246
+  339  [   -]  LOADK      18 317        ; 1244
+  340  [   -]  LOADK      19 318        ; 1195
+  341  [   -]  LOADK      20 319        ; 1200
+  342  [   -]  SETLIST    11 9 1
+  343  [   -]  NEWTABLE   12 9 0
+  344  [   -]  LOADK      13 320        ; 1199
+  345  [   -]  LOADK      14 321        ; 1259
+  346  [   -]  LOADK      15 322        ; 1173
+  347  [   -]  LOADK      16 323        ; 1185
+  348  [   -]  LOADK      17 324        ; 1218
+  349  [   -]  LOADK      18 325        ; 1203
+  350  [   -]  LOADK      19 326        ; 1255
+  351  [   -]  LOADK      20 327        ; 1187
+  352  [   -]  LOADK      21 328        ; 1193
+  353  [   -]  SETLIST    12 9 1
+  354  [   -]  NEWTABLE   13 9 0
+  355  [   -]  LOADK      14 329        ; 1231
+  356  [   -]  LOADK      15 330        ; 1177
+  357  [   -]  LOADK      16 331        ; 1186
+  358  [   -]  LOADK      17 332        ; 1261
+  359  [   -]  LOADK      18 333        ; 1182
+  360  [   -]  LOADK      19 334        ; 1190
+  361  [   -]  LOADK      20 335        ; 1245
+  362  [   -]  LOADK      21 336        ; 1242
+  363  [   -]  LOADK      22 337        ; 1180
+  364  [   -]  SETLIST    13 9 1
+  365  [   -]  NEWTABLE   14 9 0
+  366  [   -]  LOADK      15 338        ; 1211
+  367  [   -]  LOADK      16 339        ; 1205
+  368  [   -]  LOADK      17 340        ; 1258
+  369  [   -]  LOADK      18 341        ; 1226
+  370  [   -]  LOADK      19 342        ; 1252
+  371  [   -]  LOADK      20 343        ; 1209
+  372  [   -]  LOADK      21 344        ; 1216
+  373  [   -]  LOADK      22 345        ; 1222
+  374  [   -]  LOADK      23 346        ; 1176
+  375  [   -]  SETLIST    14 9 1
+  376  [   -]  SETLIST    4 10 1
+  377  [   -]  NEWTABLE   5 18 0
+  378  [   -]  LOADK      6 347         ; 9
+  379  [   -]  LOADK      7 348         ; 1
+  380  [   -]  LOADK      8 348         ; 1
+  381  [   -]  LOADK      9 348         ; 1
+  382  [   -]  LOADK      10 347        ; 9
+  383  [   -]  LOADK      11 349        ; 3
+  384  [   -]  LOADK      12 350        ; 2
+  385  [   -]  LOADK      13 348        ; 1
+  386  [   -]  LOADK      14 350        ; 2
+  387  [   -]  LOADK      15 350        ; 2
+  388  [   -]  LOADK      16 351        ; 5
+  389  [   -]  LOADK      17 352        ; 4
+  390  [   -]  LOADK      18 353        ; 8
+  391  [   -]  LOADK      19 347        ; 9
+  392  [   -]  LOADK      20 349        ; 3
+  393  [   -]  LOADK      21 354        ; 7
+  394  [   -]  LOADK      22 348        ; 1
+  395  [   -]  LOADK      23 352        ; 4
+  396  [   -]  LOADK      24 353        ; 8
+  397  [   -]  LOADK      25 352        ; 4
+  398  [   -]  SETLIST    5 20 1
+  399  [   -]  LOADK      6 355         ; 1782450080
+  400  [   -]  NEWTABLE   7 0 0
+  401  [   -]  NEWTABLE   8 0 0
+  402  [   -]  NEWTABLE   9 0 0
+  403  [   -]  LOADNIL    10 0
+  404  [   -]  LOADBOOL   11 1 0
+  405  [   -]  LOADK      12 356        ; &quot;_G&quot;
+  406  [   -]  LOADNIL    13 0
+  407  [   -]  SETTABUP   0 12 13
+  408  [   -]  LOADNIL    12 37
+  409  [   -]  LOADK      50 357        ; &quot;next&quot;
+  410  [   -]  GETTABUP   50 0 50
+  411  [   -]  GETUPVAL   51 0
+  412  [   -]  LOADNIL    52 0
+  413  [   -]  JMP        0 191         ; → 605
+  414  [   -]  TEST       47 1
+  415  [   -]  JMP        0 4           ; → 420
+  416  [   -]  TESTSET    47 45 0
+  417  [   -]  JMP        0 2           ; → 420
+  418  [   -]  NEWTABLE   55 0 0
+  419  [   -]  MOVE       47 55
+  420  [   -]  TEST       48 1
+  421  [   -]  JMP        0 4           ; → 426
+  422  [   -]  TESTSET    48 45 0
+  423  [   -]  JMP        0 2           ; → 426
+  424  [   -]  NEWTABLE   55 0 0
+  425  [   -]  MOVE       48 55
+  426  [   -]  TEST       49 1
+  427  [   -]  JMP        0 4           ; → 432
+  428  [   -]  TESTSET    49 45 0
+  429  [   -]  JMP        0 2           ; → 432
+  430  [   -]  NEWTABLE   55 0 0
+  431  [   -]  MOVE       49 55
+  432  [   -]  TEST       46 1
+  433  [   -]  JMP        0 3           ; → 437
+  434  [   -]  TESTSET    46 45 0
+  435  [   -]  JMP        0 1           ; → 437
+  436  [   -]  MOVE       46 53
+  437  [   -]  TEST       45 1
+  438  [   -]  JMP        0 3           ; → 442
+  439  [   -]  TESTSET    45 44 0
+  440  [   -]  JMP        0 1           ; → 442
+  441  [   -]  MOVE       45 53
+  442  [   -]  TEST       44 1
+  443  [   -]  JMP        0 3           ; → 447
+  444  [   -]  TESTSET    44 43 0
+  445  [   -]  JMP        0 1           ; → 447
+  446  [   -]  MOVE       44 53
+  447  [   -]  TEST       43 1
+  448  [   -]  JMP        0 3           ; → 452
+  449  [   -]  TESTSET    43 42 0
+  450  [   -]  JMP        0 1           ; → 452
+  451  [   -]  MOVE       43 53
+  452  [   -]  TEST       42 1
+  453  [   -]  JMP        0 3           ; → 457
+  454  [   -]  TESTSET    42 41 0
+  455  [   -]  JMP        0 1           ; → 457
+  456  [   -]  MOVE       42 53
+  457  [   -]  TEST       41 1
+  458  [   -]  JMP        0 3           ; → 462
+  459  [   -]  TESTSET    41 40 0
+  460  [   -]  JMP        0 1           ; → 462
+  461  [   -]  MOVE       41 53
+  462  [   -]  TEST       40 1
+  463  [   -]  JMP        0 3           ; → 467
+  464  [   -]  TESTSET    40 39 0
+  465  [   -]  JMP        0 1           ; → 467
+  466  [   -]  MOVE       40 53
+  467  [   -]  TEST       39 1
+  468  [   -]  JMP        0 3           ; → 472
+  469  [   -]  TESTSET    39 38 0
+  470  [   -]  JMP        0 1           ; → 472
+  471  [   -]  MOVE       39 53
+  472  [   -]  TEST       38 1
+  473  [   -]  JMP        0 3           ; → 477
+  474  [   -]  TESTSET    38 37 0
+  475  [   -]  JMP        0 1           ; → 477
+  476  [   -]  MOVE       38 53
+  477  [   -]  TEST       37 1
+  478  [   -]  JMP        0 3           ; → 482
+  479  [   -]  TESTSET    37 36 0
+  480  [   -]  JMP        0 1           ; → 482
+  481  [   -]  MOVE       37 53
+  482  [   -]  TEST       36 1
+  483  [   -]  JMP        0 3           ; → 487
+  484  [   -]  TESTSET    36 35 0
+  485  [   -]  JMP        0 1           ; → 487
+  486  [   -]  MOVE       36 53
+  487  [   -]  TEST       35 1
+  488  [   -]  JMP        0 3           ; → 492
+  489  [   -]  TESTSET    35 34 0
+  490  [   -]  JMP        0 1           ; → 492
+  491  [   -]  MOVE       35 53
+  492  [   -]  TEST       34 1
+  493  [   -]  JMP        0 3           ; → 497
+  494  [   -]  TESTSET    34 33 0
+  495  [   -]  JMP        0 1           ; → 497
+  496  [   -]  MOVE       34 53
+  497  [   -]  TEST       33 1
+  498  [   -]  JMP        0 3           ; → 502
+  499  [   -]  TESTSET    33 32 0
+  500  [   -]  JMP        0 1           ; → 502
+  501  [   -]  MOVE       33 53
+  502  [   -]  TEST       32 1
+  503  [   -]  JMP        0 3           ; → 507
+  504  [   -]  TESTSET    32 31 0
+  505  [   -]  JMP        0 1           ; → 507
+  506  [   -]  MOVE       32 53
+  507  [   -]  TEST       31 1
+  508  [   -]  JMP        0 3           ; → 512
+  509  [   -]  TESTSET    31 30 0
+  510  [   -]  JMP        0 1           ; → 512
+  511  [   -]  MOVE       31 53
+  512  [   -]  TEST       30 1
+  513  [   -]  JMP        0 3           ; → 517
+  514  [   -]  TESTSET    30 29 0
+  515  [   -]  JMP        0 1           ; → 517
+  516  [   -]  MOVE       30 53
+  517  [   -]  TEST       29 1
+  518  [   -]  JMP        0 3           ; → 522
+  519  [   -]  TESTSET    29 28 0
+  520  [   -]  JMP        0 1           ; → 522
+  521  [   -]  MOVE       29 53
+  522  [   -]  TEST       28 1
+  523  [   -]  JMP        0 3           ; → 527
+  524  [   -]  TESTSET    28 27 0
+  525  [   -]  JMP        0 1           ; → 527
+  526  [   -]  MOVE       28 53
+  527  [   -]  TEST       27 1
+  528  [   -]  JMP        0 3           ; → 532
+  529  [   -]  TESTSET    27 26 0
+  530  [   -]  JMP        0 1           ; → 532
+  531  [   -]  MOVE       27 53
+  532  [   -]  TEST       26 1
+  533  [   -]  JMP        0 3           ; → 537
+  534  [   -]  TESTSET    26 25 0
+  535  [   -]  JMP        0 1           ; → 537
+  536  [   -]  MOVE       26 53
+  537  [   -]  TEST       25 1
+  538  [   -]  JMP        0 3           ; → 542
+  539  [   -]  TESTSET    25 24 0
+  540  [   -]  JMP        0 1           ; → 542
+  541  [   -]  MOVE       25 53
+  542  [   -]  TEST       24 1
+  543  [   -]  JMP        0 3           ; → 547
+  544  [   -]  TESTSET    24 23 0
+  545  [   -]  JMP        0 1           ; → 547
+  546  [   -]  MOVE       24 53
+  547  [   -]  TEST       23 1
+  548  [   -]  JMP        0 3           ; → 552
+  549  [   -]  TESTSET    23 22 0
+  550  [   -]  JMP        0 1           ; → 552
+  551  [   -]  MOVE       23 53
+  552  [   -]  TEST       22 1
+  553  [   -]  JMP        0 3           ; → 557
+  554  [   -]  TESTSET    22 21 0
+  555  [   -]  JMP        0 1           ; → 557
+  556  [   -]  MOVE       22 53
+  557  [   -]  TEST       21 1
+  558  [   -]  JMP        0 3           ; → 562
+  559  [   -]  TESTSET    21 20 0
+  560  [   -]  JMP        0 1           ; → 562
+  561  [   -]  MOVE       21 53
+  562  [   -]  TEST       20 1
+  563  [   -]  JMP        0 3           ; → 567
+  564  [   -]  TESTSET    20 19 0
+  565  [   -]  JMP        0 1           ; → 567
+  566  [   -]  MOVE       20 53
+  567  [   -]  TEST       19 1
+  568  [   -]  JMP        0 3           ; → 572
+  569  [   -]  TESTSET    19 18 0
+  570  [   -]  JMP        0 1           ; → 572
+  571  [   -]  MOVE       19 53
+  572  [   -]  TEST       18 1
+  573  [   -]  JMP        0 3           ; → 577
+  574  [   -]  TESTSET    18 17 0
+  575  [   -]  JMP        0 1           ; → 577
+  576  [   -]  MOVE       18 53
+  577  [   -]  TEST       17 1
+  578  [   -]  JMP        0 3           ; → 582
+  579  [   -]  TESTSET    17 16 0
+  580  [   -]  JMP        0 1           ; → 582
+  581  [   -]  MOVE       17 53
+  582  [   -]  TEST       16 1
+  583  [   -]  JMP        0 3           ; → 587
+  584  [   -]  TESTSET    16 15 0
+  585  [   -]  JMP        0 1           ; → 587
+  586  [   -]  MOVE       16 53
+  587  [   -]  TEST       15 1
+  588  [   -]  JMP        0 3           ; → 592
+  589  [   -]  TESTSET    15 14 0
+  590  [   -]  JMP        0 1           ; → 592
+  591  [   -]  MOVE       15 53
+  592  [   -]  TEST       14 1
+  593  [   -]  JMP        0 3           ; → 597
+  594  [   -]  TESTSET    14 13 0
+  595  [   -]  JMP        0 1           ; → 597
+  596  [   -]  MOVE       14 53
+  597  [   -]  TEST       13 1
+  598  [   -]  JMP        0 3           ; → 602
+  599  [   -]  TESTSET    13 12 0
+  600  [   -]  JMP        0 1           ; → 602
+  601  [   -]  MOVE       13 53
+  602  [   -]  TEST       12 1
+  603  [   -]  JMP        0 1           ; → 605
+  604  [   -]  MOVE       12 53
+  605  [   -]  TFORCALL   50 2
+  606  [   -]  TFORLOOP   52 -193       ; → 414
+  607  [   -]  SETTABLE   49 15 15
+  608  [   -]  SETTABLE   49 17 17
+  609  [   -]  SETTABLE   49 22 22
+  610  [   -]  SETTABLE   49 26 26
+  611  [   -]  SETTABLE   49 27 27
+  612  [   -]  SETTABLE   49 28 28
+  613  [   -]  SETTABLE   49 29 29
+  614  [   -]  SETTABLE   49 30 30
+  615  [   -]  SETTABLE   49 36 36
+  616  [   -]  SETTABLE   49 39 39
+  617  [   -]  LOADNIL    50 6
+  618  [   -]  LOADK      57 357        ; &quot;next&quot;
+  619  [   -]  GETTABUP   57 0 57
+  620  [   -]  GETTABUP   58 0 15
+  621  [   -]  LOADNIL    59 0
+  622  [   -]  JMP        0 33          ; → 656
+  623  [   -]  TEST       56 1
+  624  [   -]  JMP        0 3           ; → 628
+  625  [   -]  TESTSET    56 55 0
+  626  [   -]  JMP        0 1           ; → 628
+  627  [   -]  MOVE       56 60
+  628  [   -]  TEST       55 1
+  629  [   -]  JMP        0 3           ; → 633
+  630  [   -]  TESTSET    55 54 0
+  631  [   -]  JMP        0 1           ; → 633
+  632  [   -]  MOVE       55 60
+  633  [   -]  TEST       54 1
+  634  [   -]  JMP        0 3           ; → 638
+  635  [   -]  TESTSET    54 53 0
+  636  [   -]  JMP        0 1           ; → 638
+  637  [   -]  MOVE       54 60
+  638  [   -]  TEST       53 1
+  639  [   -]  JMP        0 3           ; → 643
+  640  [   -]  TESTSET    53 52 0
+  641  [   -]  JMP        0 1           ; → 643
+  642  [   -]  MOVE       53 60
+  643  [   -]  TEST       52 1
+  644  [   -]  JMP        0 3           ; → 648
+  645  [   -]  TESTSET    52 51 0
+  646  [   -]  JMP        0 1           ; → 648
+  647  [   -]  MOVE       52 60
+  648  [   -]  TEST       51 1
+  649  [   -]  JMP        0 3           ; → 653
+  650  [   -]  TESTSET    51 50 0
+  651  [   -]  JMP        0 1           ; → 653
+  652  [   -]  MOVE       51 60
+  653  [   -]  TEST       50 1
+  654  [   -]  JMP        0 1           ; → 656
+  655  [   -]  MOVE       50 60
+  656  [   -]  TFORCALL   57 2
+  657  [   -]  TFORLOOP   59 -35        ; → 623
+  658  [   -]  LOADK      57 357        ; &quot;next&quot;
+  659  [   -]  GETTABUP   57 0 57
+  660  [   -]  GETUPVAL   58 0
+  661  [   -]  LOADNIL    59 0
+  662  [   -]  JMP        0 31          ; → 694
+  663  [   -]  LEN        62 47
+  664  [   -]  LOADK      63 348        ; 1
+  665  [   -]  ADD        62 62 63
+  666  [   -]  GETTABLE   63 49 60
+  667  [   -]  TEST       63 0
+  668  [   -]  JMP        0 3           ; → 672
+  669  [   -]  NEWTABLE   63 0 0
+  670  [   -]  TEST       63 1
+  671  [   -]  JMP        0 1           ; → 673
+  672  [   -]  MOVE       63 61
+  673  [   -]  SETTABLE   47 62 63
+  674  [   -]  LOADK      62 357        ; &quot;next&quot;
+  675  [   -]  GETTABUP   62 0 62
+  676  [   -]  GETTABLE   63 49 60
+  677  [   -]  TEST       63 0
+  678  [   -]  JMP        0 2           ; → 681
+  679  [   -]  TESTSET    63 61 1
+  680  [   -]  JMP        0 1           ; → 682
+  681  [   -]  NEWTABLE   63 0 0
+  682  [   -]  LOADNIL    64 0
+  683  [   -]  JMP        0 8           ; → 692
+  684  [   -]  LEN        67 47
+  685  [   -]  GETTABLE   67 47 67
+  686  [   -]  EQ         1 60 28
+  687  [   -]  JMP        0 2           ; → 690
+  688  [   -]  TESTSET    68 66 1
+  689  [   -]  JMP        0 1           ; → 691
+  690  [   -]  NEWTABLE   68 0 0
+  691  [   -]  SETTABLE   67 65 68
+  692  [   -]  TFORCALL   62 2
+  693  [   -]  TFORLOOP   64 -10        ; → 684
+  694  [   -]  TFORCALL   57 2
+  695  [   -]  TFORLOOP   59 -33        ; → 663
+  696  [   -]  LOADNIL    57 18
+  697  [   -]  GETTABUP   76 0 15
+  698  [   -]  GETTABLE   76 76 56
+  699  [   -]  MOVE       77 47
+  700  [   -]  CALL       76 2 36
+  701  [   -]  CLOSURE    111 0         ; função #0
+  702  [   -]  MOVE       112 111
+  703  [   -]  MOVE       113 81
+  704  [   -]  CALL       112 2 2
+  705  [   -]  TEST       112 0
+  706  [   -]  JMP        0 1           ; → 708
+  707  [   -]  LOADNIL    112 0
+  708  [   -]  GETTABLE   113 81 66
+  709  [   -]  LEN        114 22
+  710  [   -]  LEN        115 26
+  711  [   -]  DIV        114 114 115
+  712  [   -]  LEN        115 22
+  713  [   -]  ADD        114 114 115
+  714  [   -]  CALL       113 2 2
+  715  [   -]  GETTABLE   114 81 66
+  716  [   -]  LEN        115 22
+  717  [   -]  CALL       114 2 2
+  718  [   -]  GETTABLE   115 81 66
+  719  [   -]  LEN        116 22
+  720  [   -]  LEN        117 22
+  721  [   -]  DIV        116 116 117
+  722  [   -]  CALL       115 2 2
+  723  [   -]  MOVE       116 111
+  724  [   -]  MOVE       117 115
+  725  [   -]  CALL       116 2 14
+  726  [   -]  GETTABLE   129 114 124
+  727  [   -]  TEST       129 1
+  728  [   -]  JMP        0 36          ; → 765
+  729  [   -]  GETTABLE   129 114 127
+  730  [   -]  TEST       129 1
+  731  [   -]  JMP        0 6           ; → 738
+  732  [   -]  TESTSET    129 113 1
+  733  [   -]  JMP        0 1           ; → 735
+  734  [   -]  NEWTABLE   129 0 0
+  735  [   -]  GETTABLE   129 129 125
+  736  [   -]  TEST       129 0
+  737  [   -]  JMP        0 14          ; → 752
+  738  [   -]  GETTABLE   129 113 127
+  739  [   -]  TEST       129 0
+  740  [   -]  JMP        0 4           ; → 745
+  741  [   -]  GETTABLE   129 113 125
+  742  [   -]  CALL       129 1 2
+  743  [   -]  TEST       129 1
+  744  [   -]  JMP        0 5           ; → 750
+  745  [   -]  GETTABLE   129 59 127
+  746  [   -]  TEST       129 0
+  747  [   -]  JMP        0 2           ; → 750
+  748  [   -]  GETTABLE   129 58 127
+  749  [   -]  NOT        129 129
+  750  [   -]  RETURN     129 2
+  751  [   -]  JMP        0 5           ; → 757
+  752  [   -]  TEST       113 0
+  753  [   -]  JMP        0 3           ; → 757
+  754  [   -]  GETTABLE   129 114 125
+  755  [   -]  TAILCALL   129 1 0
+  756  [   -]  RETURN     129 0
+  757  [   -]  TESTSET    129 6 0
+  758  [   -]  JMP        0 5           ; → 764
+  759  [   -]  GETTABLE   129 114 125
+  760  [   -]  CALL       129 1 2
+  761  [   -]  TEST       129 0
+  762  [   -]  JMP        0 1           ; → 764
+  763  [   -]  LOADNIL    129 0
+  764  [   -]  JMP        0 16          ; → 781
+  765  [   -]  GETTABLE   129 114 127
+  766  [   -]  TEST       129 1
+  767  [   -]  JMP        0 6           ; → 774
+  768  [   -]  GETTABLE   129 113 127
+  769  [   -]  TEST       129 1
+  770  [   -]  JMP        0 3           ; → 774
+  771  [   -]  GETTABLE   129 114 125
+  772  [   -]  TAILCALL   129 1 0
+  773  [   -]  RETURN     129 0
+  774  [   -]  TESTSET    129 7 0
+  775  [   -]  JMP        0 5           ; → 781
+  776  [   -]  GETTABLE   129 114 125
+  777  [   -]  CALL       129 1 2
+  778  [   -]  TEST       129 0
+  779  [   -]  JMP        0 1           ; → 781
+  780  [   -]  LOADNIL    129 0
+  781  [   -]  GETTABLE   129 81 73
+  782  [   -]  CLOSURE    130 1         ; função #1
+  783  [   -]  LOADK      131 358       ; &quot;crl&quot;
+  784  [   -]  CALL       129 3 2
+  785  [   -]  TEST       129 0
+  786  [   -]  JMP        0 0           ; → 787
+  787  [   -]  LOADNIL    112 0
+  788  [   -]  GETTABLE   129 114 124
+  789  [   -]  TEST       129 1
+  790  [   -]  JMP        0 36          ; → 827
+  791  [   -]  GETTABLE   129 114 127
+  792  [   -]  TEST       129 1
+  793  [   -]  JMP        0 6           ; → 800
+  794  [   -]  TESTSET    129 113 1
+  795  [   -]  JMP        0 1           ; → 797
+  796  [   -]  NEWTABLE   129 0 0
+  797  [   -]  GETTABLE   129 129 125
+  798  [   -]  TEST       129 0
+  799  [   -]  JMP        0 14          ; → 814
+  800  [   -]  GETTABLE   129 113 127
+  801  [   -]  TEST       129 0
+  802  [   -]  JMP        0 4           ; → 807
+  803  [   -]  GETTABLE   129 113 125
+  804  [   -]  CALL       129 1 2
+  805  [   -]  TEST       129 1
+  806  [   -]  JMP        0 5           ; → 812
+  807  [   -]  GETTABLE   129 59 127
+  808  [   -]  TEST       129 0
+  809  [   -]  JMP        0 2           ; → 812
+  810  [   -]  GETTABLE   129 58 127
+  811  [   -]  NOT        129 129
+  812  [   -]  RETURN     129 2
+  813  [   -]  JMP        0 5           ; → 819
+  814  [   -]  TEST       113 0
+  815  [   -]  JMP        0 3           ; → 819
+  816  [   -]  GETTABLE   129 114 125
+  817  [   -]  TAILCALL   129 1 0
+  818  [   -]  RETURN     129 0
+  819  [   -]  TESTSET    129 6 0
+  820  [   -]  JMP        0 5           ; → 826
+  821  [   -]  GETTABLE   129 114 125
+  822  [   -]  CALL       129 1 2
+  823  [   -]  TEST       129 0
+  824  [   -]  JMP        0 1           ; → 826
+  825  [   -]  LOADNIL    129 0
+  826  [   -]  JMP        0 16          ; → 843
+  827  [   -]  GETTABLE   129 114 127
+  828  [   -]  TEST       129 1
+  829  [   -]  JMP        0 6           ; → 836
+  830  [   -]  GETTABLE   129 113 127
+  831  [   -]  TEST       129 1
+  832  [   -]  JMP        0 3           ; → 836
+  833  [   -]  GETTABLE   129 114 125
+  834  [   -]  TAILCALL   129 1 0
+  835  [   -]  RETURN     129 0
+  836  [   -]  TESTSET    129 7 0
+  837  [   -]  JMP        0 5           ; → 843
+  838  [   -]  GETTABLE   129 114 125
+  839  [   -]  CALL       129 1 2
+  840  [   -]  TEST       129 0
+  841  [   -]  JMP        0 1           ; → 843
+  842  [   -]  LOADNIL    129 0
+  843  [   -]  MOVE       129 111
+  844  [   -]  MOVE       130 100
+  845  [   -]  CALL       129 2 18
+  846  [   -]  LOADNIL    146 1
+  847  [   -]  CLOSURE    148 2         ; função #2
+  848  [   -]  CLOSURE    149 3         ; função #3
+  849  [   -]  MOVE       146 149
+  850  [   -]  MOVE       2 146
+  851  [   -]  JMP        4 0           ; → 852
+  852  [   -]  MOVE       3 2
+  853  [   -]  CLOSURE    4 4           ; função #4
+  854  [   -]  MOVE       5 4
+  855  [   -]  TAILCALL   5 1 0
+  856  [   -]  RETURN     5 0
+  857  [   -]  RETURN     0 1
+constantes:
+  K0	0
+  K1	&quot;\000&quot;
+  K2	&quot;\001&quot;
+  K3	&quot;\002&quot;
+  K4	&quot;\003&quot;
+  K5	&quot;\004&quot;
+  K6	&quot;\005&quot;
+  K7	&quot;\006&quot;
+  K8	&quot;\007&quot;
+  K9	&quot;\008&quot;
+  K10	&quot;\t&quot;
+  K11	&quot;\n&quot;
+  K12	&quot;\011&quot;
+  K13	&quot;\012&quot;
+  K14	&quot;\r&quot;
+  K15	&quot;\014&quot;
+  K16	&quot;\015&quot;
+  K17	&quot;\016&quot;
+  K18	&quot;\017&quot;
+  K19	&quot;\018&quot;
+  K20	&quot;\019&quot;
+  K21	&quot;\020&quot;
+  K22	&quot;\021&quot;
+  K23	&quot;\022&quot;
+  K24	&quot;\023&quot;
+  K25	&quot;\024&quot;
+  K26	&quot;\025&quot;
+  K27	&quot;\026&quot;
+  K28	&quot;\027&quot;
+  K29	&quot;\028&quot;
+  K30	&quot;\029&quot;
+  K31	&quot;\030&quot;
+  K32	&quot;\031&quot;
+  K33	&quot; &quot;
+  K34	&quot;!&quot;
+  K35	&quot;\&quot;&quot;
+  K36	&quot;#&quot;
+  K37	&quot;$&quot;
+  K38	&quot;%&quot;
+  K39	&quot;&amp;&quot;
+  K40	&quot;&#x27;&quot;
+  K41	&quot;(&quot;
+  K42	&quot;)&quot;
+  K43	&quot;*&quot;
+  K44	&quot;+&quot;
+  K45	&quot;,&quot;
+  K46	&quot;-&quot;
+  K47	&quot;.&quot;
+  K48	&quot;/&quot;
+  K49	&quot;0&quot;
+  K50	&quot;1&quot;
+  K51	&quot;2&quot;
+  K52	&quot;3&quot;
+  K53	&quot;4&quot;
+  K54	&quot;5&quot;
+  K55	&quot;6&quot;
+  K56	&quot;7&quot;
+  K57	&quot;8&quot;
+  K58	&quot;9&quot;
+  K59	&quot;:&quot;
+  K60	&quot;;&quot;
+  K61	&quot;&lt;&quot;
+  K62	&quot;=&quot;
+  K63	&quot;&gt;&quot;
+  K64	&quot;?&quot;
+  K65	&quot;@&quot;
+  K66	&quot;A&quot;
+  K67	&quot;B&quot;
+  K68	&quot;C&quot;
+  K69	&quot;D&quot;
+  K70	&quot;E&quot;
+  K71	&quot;F&quot;
+  K72	&quot;G&quot;
+  K73	&quot;H&quot;
+  K74	&quot;I&quot;
+  K75	&quot;J&quot;
+  K76	&quot;K&quot;
+  K77	&quot;L&quot;
+  K78	&quot;M&quot;
+  K79	&quot;N&quot;
+  K80	&quot;O&quot;
+  K81	&quot;P&quot;
+  K82	&quot;Q&quot;
+  K83	&quot;R&quot;
+  K84	&quot;S&quot;
+  K85	&quot;T&quot;
+  K86	&quot;U&quot;
+  K87	&quot;V&quot;
+  K88	&quot;W&quot;
+  K89	&quot;X&quot;
+  K90	&quot;Y&quot;
+  K91	&quot;Z&quot;
+  K92	&quot;[&quot;
+  K93	&quot;\\&quot;
+  K94	&quot;]&quot;
+  K95	&quot;^&quot;
+  K96	&quot;_&quot;
+  K97	&quot;`&quot;
+  K98	&quot;a&quot;
+  K99	&quot;b&quot;
+  K100	&quot;c&quot;
+  K101	&quot;d&quot;
+  K102	&quot;e&quot;
+  K103	&quot;f&quot;
+  K104	&quot;g&quot;
+  K105	&quot;h&quot;
+  K106	&quot;i&quot;
+  K107	&quot;j&quot;
+  K108	&quot;k&quot;
+  K109	&quot;l&quot;
+  K110	&quot;m&quot;
+  K111	&quot;n&quot;
+  K112	&quot;o&quot;
+  K113	&quot;p&quot;
+  K114	&quot;q&quot;
+  K115	&quot;r&quot;
+  K116	&quot;s&quot;
+  K117	&quot;t&quot;
+  K118	&quot;u&quot;
+  K119	&quot;v&quot;
+  K120	&quot;w&quot;
+  K121	&quot;x&quot;
+  K122	&quot;y&quot;
+  K123	&quot;z&quot;
+  K124	&quot;{&quot;
+  K125	&quot;|&quot;
+  K126	&quot;}&quot;
+  K127	&quot;~&quot;
+  K128	&quot;\127&quot;
+  K129	&quot;\128&quot;
+  K130	&quot;\129&quot;
+  K131	&quot;\130&quot;
+  K132	&quot;\131&quot;
+  K133	&quot;\132&quot;
+  K134	&quot;\133&quot;
+  K135	&quot;\134&quot;
+  K136	&quot;\135&quot;
+  K137	&quot;\136&quot;
+  K138	&quot;\137&quot;
+  K139	&quot;\138&quot;
+  K140	&quot;\139&quot;
+  K141	&quot;\140&quot;
+  K142	&quot;\141&quot;
+  K143	&quot;\142&quot;
+  K144	&quot;\143&quot;
+  K145	&quot;\144&quot;
+  K146	&quot;\145&quot;
+  K147	&quot;\146&quot;
+  K148	&quot;\147&quot;
+  K149	&quot;\148&quot;
+  K150	&quot;\149&quot;
+  K151	&quot;\150&quot;
+  K152	&quot;\151&quot;
+  K153	&quot;\152&quot;
+  K154	&quot;\153&quot;
+  K155	&quot;\154&quot;
+  K156	&quot;\155&quot;
+  K157	&quot;\156&quot;
+  K158	&quot;\157&quot;
+  K159	&quot;\158&quot;
+  K160	&quot;\159&quot;
+  K161	&quot;\160&quot;
+  K162	&quot;\161&quot;
+  K163	&quot;\162&quot;
+  K164	&quot;\163&quot;
+  K165	&quot;\164&quot;
+  K166	&quot;\165&quot;
+  K167	&quot;\166&quot;
+  K168	&quot;\167&quot;
+  K169	&quot;\168&quot;
+  K170	&quot;\169&quot;
+  K171	&quot;\170&quot;
+  K172	&quot;\171&quot;
+  K173	&quot;\172&quot;
+  K174	&quot;\173&quot;
+  K175	&quot;\174&quot;
+  K176	&quot;\175&quot;
+  K177	&quot;\176&quot;
+  K178	&quot;\177&quot;
+  K179	&quot;\178&quot;
+  K180	&quot;\179&quot;
+  K181	&quot;\180&quot;
+  K182	&quot;\181&quot;
+  K183	&quot;\182&quot;
+  K184	&quot;\183&quot;
+  K185	&quot;\184&quot;
+  K186	&quot;\185&quot;
+  K187	&quot;\186&quot;
+  K188	&quot;\187&quot;
+  K189	&quot;\188&quot;
+  K190	&quot;\189&quot;
+  K191	&quot;\190&quot;
+  K192	&quot;\191&quot;
+  K193	&quot;\192&quot;
+  K194	&quot;\193&quot;
+  K195	&quot;\194&quot;
+  K196	&quot;\195&quot;
+  K197	&quot;\196&quot;
+  K198	&quot;\197&quot;
+  K199	&quot;\198&quot;
+  K200	&quot;\199&quot;
+  K201	&quot;\200&quot;
+  K202	&quot;\201&quot;
+  K203	&quot;\202&quot;
+  K204	&quot;\203&quot;
+  K205	&quot;\204&quot;
+  K206	&quot;\205&quot;
+  K207	&quot;\206&quot;
+  K208	&quot;\207&quot;
+  K209	&quot;\208&quot;
+  K210	&quot;\209&quot;
+  K211	&quot;\210&quot;
+  K212	&quot;\211&quot;
+  K213	&quot;\212&quot;
+  K214	&quot;\213&quot;
+  K215	&quot;\214&quot;
+  K216	&quot;\215&quot;
+  K217	&quot;\216&quot;
+  K218	&quot;\217&quot;
+  K219	&quot;\218&quot;
+  K220	&quot;\219&quot;
+  K221	&quot;\220&quot;
+  K222	&quot;\221&quot;
+  K223	&quot;\222&quot;
+  K224	&quot;\223&quot;
+  K225	&quot;\224&quot;
+  K226	&quot;\225&quot;
+  K227	&quot;\226&quot;
+  K228	&quot;\227&quot;
+  K229	&quot;\228&quot;
+  K230	&quot;\229&quot;
+  K231	&quot;\230&quot;
+  K232	&quot;\231&quot;
+  K233	&quot;\232&quot;
+  K234	&quot;\233&quot;
+  K235	&quot;\234&quot;
+  K236	&quot;\235&quot;
+  K237	&quot;\236&quot;
+  K238	&quot;\237&quot;
+  K239	&quot;\238&quot;
+  K240	&quot;\239&quot;
+  K241	&quot;\240&quot;
+  K242	&quot;\241&quot;
+  K243	&quot;\242&quot;
+  K244	&quot;\243&quot;
+  K245	&quot;\244&quot;
+  K246	&quot;\245&quot;
+  K247	&quot;\246&quot;
+  K248	&quot;\247&quot;
+  K249	&quot;\248&quot;
+  K250	&quot;\249&quot;
+  K251	&quot;\250&quot;
+  K252	&quot;\251&quot;
+  K253	&quot;\252&quot;
+  K254	&quot;\253&quot;
+  K255	&quot;\254&quot;
+  K256	&quot;\255&quot;
+  K257	1253
+  K258	1240
+  K259	1251
+  K260	1175
+  K261	1233
+  K262	1221
+  K263	1196
+  K264	1202
+  K265	1254
+  K266	1201
+  K267	1238
+  K268	1174
+  K269	1197
+  K270	1228
+  K271	1249
+  K272	1257
+  K273	1210
+  K274	1224
+  K275	1239
+  K276	1183
+  K277	1179
+  K278	1214
+  K279	1198
+  K280	1184
+  K281	1220
+  K282	1247
+  K283	1204
+  K284	1237
+  K285	1248
+  K286	1206
+  K287	1250
+  K288	1230
+  K289	1192
+  K290	1188
+  K291	1178
+  K292	1229
+  K293	1243
+  K294	1212
+  K295	1219
+  K296	1207
+  K297	1236
+  K298	1217
+  K299	1256
+  K300	1213
+  K301	1194
+  K302	1227
+  K303	1234
+  K304	1225
+  K305	1262
+  K306	1215
+  K307	1241
+  K308	1232
+  K309	1181
+  K310	1223
+  K311	1191
+  K312	1235
+  K313	1208
+  K314	1260
+  K315	1189
+  K316	1246
+  K317	1244
+  K318	1195
+  K319	1200
+  K320	1199
+  K321	1259
+  K322	1173
+  K323	1185
+  K324	1218
+  K325	1203
+  K326	1255
+  K327	1187
+  K328	1193
+  K329	1231
+  K330	1177
+  K331	1186
+  K332	1261
+  K333	1182
+  K334	1190
+  K335	1245
+  K336	1242
+  K337	1180
+  K338	1211
+  K339	1205
+  K340	1258
+  K341	1226
+  K342	1252
+  K343	1209
+  K344	1216
+  K345	1222
+  K346	1176
+  K347	9
+  K348	1
+  K349	3
+  K350	2
+  K351	5
+  K352	4
+  K353	8
+  K354	7
+  K355	1782450080
+  K356	&quot;_G&quot;
+  K357	&quot;next&quot;
+  K358	&quot;crl&quot;
+upvalues:
+  0	?	instack=1 idx=0
+</pre></details><details><summary>função main/0 · ?:75-88 · 80 instruções</summary><pre>=== função main/0 · ?:75-88 · 80 instruções ===
+params=0 vararg=1 slots=17 upvalues=27 constantes=1 funções=0
+    1  [   -]  NEWTABLE   0 0 0
+    2  [   -]  GETUPVAL   1 0
+    3  [   -]  GETUPVAL   2 1
+    4  [   -]  VARARG     3 2
+    5  [   -]  TEST       3 1
+    6  [   -]  JMP        0 1           ; → 8
+    7  [   -]  MOVE       3 0
+    8  [   -]  CALL       2 2 2
+    9  [   -]  GETUPVAL   3 2
+   10  [   -]  EQ         0 2 3
+   11  [   -]  JMP        0 3           ; → 15
+   12  [   -]  VARARG     2 2
+   13  [   -]  TEST       2 1
+   14  [   -]  JMP        0 1           ; → 16
+   15  [   -]  MOVE       2 0
+   16  [   -]  LOADNIL    3 0
+   17  [   -]  JMP        0 3           ; → 21
+   18  [   -]  LEN        6 0
+   19  [   -]  ADD        6 6 256       ; C=1
+   20  [   -]  SETTABLE   0 6 4
+   21  [   -]  TFORCALL   1 2
+   22  [   -]  TFORLOOP   3 -5          ; → 18
+   23  [   -]  VARARG     1 2
+   24  [   -]  GETUPVAL   2 3
+   25  [   -]  EQ         0 1 2
+   26  [   -]  JMP        0 48          ; → 75
+   27  [   -]  GETUPVAL   1 21
+   28  [   -]  GETTABUP   1 20 1
+   29  [   -]  MOVE       2 0
+   30  [   -]  CALL       1 2 17
+   31  [   -]  SETUPVAL   16 19
+   32  [   -]  SETUPVAL   15 18
+   33  [   -]  SETUPVAL   14 17
+   34  [   -]  SETUPVAL   13 16
+   35  [   -]  SETUPVAL   12 15
+   36  [   -]  SETUPVAL   11 14
+   37  [   -]  SETUPVAL   10 13
+   38  [   -]  SETUPVAL   9 12
+   39  [   -]  SETUPVAL   8 11
+   40  [   -]  SETUPVAL   7 10
+   41  [   -]  SETUPVAL   6 9
+   42  [   -]  SETUPVAL   5 8
+   43  [   -]  SETUPVAL   4 7
+   44  [   -]  SETUPVAL   3 6
+   45  [   -]  SETUPVAL   2 5
+   46  [   -]  SETUPVAL   1 4
+   47  [   -]  GETUPVAL   1 10
+   48  [   -]  GETTABUP   1 3 1
+   49  [   -]  GETUPVAL   2 23
+   50  [   -]  LEN        2 2
+   51  [   -]  GETUPVAL   3 24
+   52  [   -]  LEN        3 3
+   53  [   -]  DIV        2 2 3
+   54  [   -]  GETUPVAL   3 23
+   55  [   -]  LEN        3 3
+   56  [   -]  ADD        2 2 3
+   57  [   -]  CALL       1 2 2
+   58  [   -]  SETUPVAL   1 22
+   59  [   -]  GETUPVAL   1 10
+   60  [   -]  GETTABUP   1 3 1
+   61  [   -]  GETUPVAL   2 23
+   62  [   -]  LEN        2 2
+   63  [   -]  CALL       1 2 2
+   64  [   -]  SETUPVAL   1 25
+   65  [   -]  GETUPVAL   1 10
+   66  [   -]  GETTABUP   1 3 1
+   67  [   -]  GETUPVAL   2 23
+   68  [   -]  LEN        2 2
+   69  [   -]  GETUPVAL   3 23
+   70  [   -]  LEN        3 3
+   71  [   -]  DIV        2 2 3
+   72  [   -]  CALL       1 2 2
+   73  [   -]  SETUPVAL   1 26
+   74  [   -]  RETURN     0 1
+   75  [   -]  GETUPVAL   1 21
+   76  [   -]  GETTABUP   1 20 1
+   77  [   -]  MOVE       2 0
+   78  [   -]  TAILCALL   1 2 0
+   79  [   -]  RETURN     1 0
+   80  [   -]  RETURN     0 1
+constantes:
+  K0	1
+upvalues:
+  0	?	instack=1 idx=95
+  1	?	instack=1 idx=109
+  2	?	instack=1 idx=15
+  3	?	instack=1 idx=81
+  4	?	instack=1 idx=60
+  5	?	instack=1 idx=61
+  6	?	instack=1 idx=62
+  7	?	instack=1 idx=63
+  8	?	instack=1 idx=64
+  9	?	instack=1 idx=65
+  10	?	instack=1 idx=66
+  11	?	instack=1 idx=67
+  12	?	instack=1 idx=68
+  13	?	instack=1 idx=69
+  14	?	instack=1 idx=70
+  15	?	instack=1 idx=71
+  16	?	instack=1 idx=72
+  17	?	instack=1 idx=73
+  18	?	instack=1 idx=74
+  19	?	instack=1 idx=75
+  20	?	instack=1 idx=79
+  21	?	instack=1 idx=56
+  22	?	instack=1 idx=59
+  23	?	instack=1 idx=22
+  24	?	instack=1 idx=26
+  25	?	instack=1 idx=58
+  26	?	instack=1 idx=57
+</pre></details><details><summary>função main/1 · ?:107-111 · 19 instruções</summary><pre>=== função main/1 · ?:107-111 · 19 instruções ===
+params=0 vararg=1 slots=7 upvalues=2 constantes=1 funções=0
+    1  [   -]  GETUPVAL   0 0
+    2  [   -]  NEWTABLE   1 0 0
+    3  [   -]  VARARG     2 0
+    4  [   -]  SETLIST    1 0 1
+    5  [   -]  LOADNIL    2 0
+    6  [   -]  JMP        0 10          ; → 17
+    7  [   -]  GETUPVAL   5 1
+    8  [   -]  LEN        5 5
+    9  [   -]  LT         0 5 256       ; C=1
+   10  [   -]  JMP        0 2           ; → 13
+   11  [   -]  TESTSET    5 4 1
+   12  [   -]  JMP        0 3           ; → 16
+   13  [   -]  GETUPVAL   5 1
+   14  [   -]  MOVE       6 4
+   15  [   -]  CONCAT     5 5 6
+   16  [   -]  SETUPVAL   5 1
+   17  [   -]  TFORCALL   0 2
+   18  [   -]  TFORLOOP   2 -12         ; → 7
+   19  [   -]  RETURN     0 1
+constantes:
+  K0	1
+upvalues:
+  0	?	instack=1 idx=95
+  1	?	instack=1 idx=8
+</pre></details><details><summary>função main/2 · ?:127-335 · 475 instruções</summary><pre>=== função main/2 · ?:127-335 · 475 instruções ===
+params=0 vararg=1 slots=54 upvalues=50 constantes=22 funções=8
+    1  [   -]  LOADK      0 0           ; &quot;A3E0D35B&quot;
+    2  [   -]  LOADNIL    1 0
+    3  [   -]  GETUPVAL   2 0
+    4  [   -]  TEST       2 0
+    5  [   -]  JMP        0 5           ; → 11
+    6  [   -]  GETUPVAL   2 0
+    7  [   -]  GETUPVAL   3 0
+    8  [   -]  ADD        2 2 3
+    9  [   -]  TEST       2 1
+   10  [   -]  JMP        0 10          ; → 21
+   11  [   -]  GETUPVAL   2 2
+   12  [   -]  GETTABUP   2 1 2
+   13  [   -]  GETUPVAL   3 4
+   14  [   -]  GETTABUP   3 3 3
+   15  [   -]  GETUPVAL   4 5
+   16  [   -]  GETUPVAL   5 7
+   17  [   -]  GETTABUP   5 6 5
+   18  [   -]  CALL       5 1 0
+   19  [   -]  CALL       2 0 2
+   20  [   -]  LEN        2 2
+   21  [   -]  SETUPVAL   2 0
+   22  [   -]  LOADK      2 1           ; 4294967295
+   23  [   -]  LOADK      3 2           ; 3988292384
+   24  [   -]  NEWTABLE   4 0 0
+   25  [   -]  NEWTABLE   5 0 0
+   26  [   -]  LOADK      6 3           ; 0
+   27  [   -]  LOADK      7 4           ; 255
+   28  [   -]  LOADK      8 5           ; 1
+   29  [   -]  FORPREP    6 16          ; → 46
+   30  [   -]  GETTABUP   10 8 9
+   31  [   -]  SETTABLE   5 10 9
+   32  [   -]  MOVE       10 9
+   33  [   -]  LOADK      11 5          ; 1
+   34  [   -]  LOADK      12 6          ; 8
+   35  [   -]  LOADK      13 5          ; 1
+   36  [   -]  FORPREP    11 7          ; → 44
+   37  [   -]  BAND       15 10 261     ; C=1
+   38  [   -]  EQ         1 15 259      ; C=0
+   39  [   -]  JMP        0 3           ; → 43
+   40  [   -]  SHR        15 10 261     ; C=1
+   41  [   -]  BXOR       10 15 3
+   42  [   -]  JMP        0 1           ; → 44
+   43  [   -]  SHR        10 10 261     ; C=1
+   44  [   -]  FORLOOP    11 -8         ; → 37
+   45  [   -]  SETTABLE   4 9 10
+   46  [   -]  FORLOOP    6 -17         ; → 30
+   47  [   -]  GETUPVAL   6 9
+   48  [   -]  GETTABUP   6 1 6
+   49  [   -]  GETUPVAL   7 2
+   50  [   -]  GETTABUP   7 1 7
+   51  [   -]  GETUPVAL   8 4
+   52  [   -]  GETTABUP   8 3 8
+   53  [   -]  GETUPVAL   9 5
+   54  [   -]  CALL       7 3 2
+   55  [   -]  LOADK      8 7           ; &quot;....&quot;
+   56  [   -]  MOVE       9 0
+   57  [   -]  CONCAT     8 8 9
+   58  [   -]  LOADK      9 8           ; &quot;&quot;
+   59  [   -]  LOADK      10 5          ; 1
+   60  [   -]  CALL       6 5 2
+   61  [   -]  GETUPVAL   7 9
+   62  [   -]  GETTABUP   7 1 7
+   63  [   -]  MOVE       8 6
+   64  [   -]  LOADK      9 9           ; &quot;.&quot;
+   65  [   -]  CLOSURE    10 0          ; função #0
+   66  [   -]  CALL       7 4 1
+   67  [   -]  GETUPVAL   7 10
+   68  [   -]  GETTABUP   7 1 7
+   69  [   -]  LOADK      8 10          ; &quot;%08X&quot;
+   70  [   -]  BNOT       9 2 0
+   71  [   -]  BAND       9 9 257       ; C=4294967295
+   72  [   -]  CALL       7 3 2
+   73  [   -]  MOVE       1 7
+   74  [   -]  EQ         1 0 1
+   75  [   -]  JMP        3 2           ; → 78
+   76  [   -]  RETURN     0 1
+   77  [   -]  JMP        3 0           ; → 78
+   78  [   -]  LOADK      2 11          ; 65
+   79  [   -]  LOADK      3 12          ; 106
+   80  [   -]  LOADK      4 5           ; 1
+   81  [   -]  FORPREP    2 6           ; → 88
+   82  [   -]  LT         1 5 269       ; C=91
+   83  [   -]  JMP        0 2           ; → 86
+   84  [   -]  LT         0 270 5       ; B=96
+   85  [   -]  JMP        0 2           ; → 88
+   86  [   -]  GETTABUP   6 8 5
+   87  [   -]  SETTABUP   11 6 5
+   88  [   -]  FORLOOP    2 -7          ; → 82
+   89  [   -]  GETUPVAL   2 12
+   90  [   -]  LEN        2 2
+   91  [   -]  GETUPVAL   3 12
+   92  [   -]  LEN        3 3
+   93  [   -]  SUB        2 2 3
+   94  [   -]  GETUPVAL   3 9
+   95  [   -]  GETTABUP   3 1 3
+   96  [   -]  GETUPVAL   4 2
+   97  [   -]  GETTABUP   4 1 4
+   98  [   -]  GETUPVAL   5 13
+   99  [   -]  GETTABUP   5 6 5
+  100  [   -]  GETUPVAL   6 14
+  101  [   -]  LEN        6 6
+  102  [   -]  CALL       5 2 2
+  103  [   -]  GETUPVAL   6 4
+  104  [   -]  GETTABLE   5 5 6
+  105  [   -]  GETUPVAL   6 5
+  106  [   -]  CALL       4 3 2
+  107  [   -]  LOADK      5 15          ; &quot;%l%u%a+%d+hN?&quot;
+  108  [   -]  CLOSURE    6 1           ; função #1
+  109  [   -]  CALL       3 4 1
+  110  [   -]  GETUPVAL   3 16
+  111  [   -]  GETUPVAL   4 17
+  112  [   -]  CALL       3 2 15
+  113  [   -]  GETTABUP   17 17 16
+  114  [   -]  GETUPVAL   18 18
+  115  [   -]  GETTABUP   18 1 18
+  116  [   -]  LOADK      19 8          ; &quot;&quot;
+  117  [   -]  GETUPVAL   20 19
+  118  [   -]  CONCAT     19 19 20
+  119  [   -]  LOADK      20 16         ; &quot;%d+&quot;
+  120  [   -]  CALL       18 3 2
+  121  [   -]  GETUPVAL   19 20
+  122  [   -]  LEN        19 19
+  123  [   -]  ADD        18 18 19
+  124  [   -]  GETUPVAL   19 2
+  125  [   -]  GETTABUP   19 1 19
+  126  [   -]  GETUPVAL   20 13
+  127  [   -]  GETTABUP   20 6 20
+  128  [   -]  GETUPVAL   21 14
+  129  [   -]  LEN        21 21
+  130  [   -]  CALL       20 2 2
+  131  [   -]  GETUPVAL   21 4
+  132  [   -]  GETTABLE   20 20 21
+  133  [   -]  GETUPVAL   21 5
+  134  [   -]  CALL       19 3 2
+  135  [   -]  LEN        19 19
+  136  [   -]  ADD        18 18 19
+  137  [   -]  ADD        18 18 2
+  138  [   -]  CALL       17 2 1
+  139  [   -]  GETUPVAL   17 21
+  140  [   -]  LEN        17 17
+  141  [   -]  LEN        18 7
+  142  [   -]  POW        17 17 18
+  143  [   -]  GETTABUP   18 17 14
+  144  [   -]  MOVE       19 17
+  145  [   -]  GETUPVAL   20 21
+  146  [   -]  LEN        20 20
+  147  [   -]  LEN        21 9
+  148  [   -]  POW        20 20 21
+  149  [   -]  SUB        20 20 17
+  150  [   -]  CALL       18 3 2
+  151  [   -]  MOVE       5 18
+  152  [   -]  GETUPVAL   18 22
+  153  [   -]  GETUPVAL   19 23
+  154  [   -]  TEST       19 0
+  155  [   -]  JMP        0 3           ; → 159
+  156  [   -]  GETUPVAL   19 12
+  157  [   -]  TEST       19 1
+  158  [   -]  JMP        0 1           ; → 160
+  159  [   -]  NEWTABLE   19 0 0
+  160  [   -]  LOADNIL    20 0
+  161  [   -]  JMP        0 33          ; → 195
+  162  [   -]  GETTABUP   23 11 21
+  163  [   -]  TEST       23 1
+  164  [   -]  JMP        0 14          ; → 179
+  165  [   -]  GETTABUP   23 11 21
+  166  [   -]  TEST       23 1
+  167  [   -]  JMP        0 9           ; → 177
+  168  [   -]  ADD        23 21 21
+  169  [   -]  GETTABUP   23 24 23
+  170  [   -]  GETTABUP   23 12 23
+  171  [   -]  ADD        24 21 21
+  172  [   -]  SUB        24 24 261     ; C=1
+  173  [   -]  GETTABUP   24 24 24
+  174  [   -]  GETTABLE   23 23 24
+  175  [   -]  SUB        23 23 5
+  176  [   -]  JMP        0 2           ; → 179
+  177  [   -]  LOADBOOL   23 0 1
+  178  [   -]  LOADBOOL   23 1 0
+  179  [   -]  SETTABUP   11 21 23
+  180  [   -]  GETTABUP   23 11 21
+  181  [   -]  GETUPVAL   24 20
+  182  [   -]  LEN        24 24
+  183  [   -]  ADD        23 23 24
+  184  [   -]  GETUPVAL   24 23
+  185  [   -]  LEN        24 24
+  186  [   -]  ADD        23 23 24
+  187  [   -]  SETTABUP   25 21 23
+  188  [   -]  GETTABUP   23 25 21
+  189  [   -]  LEN        24 8
+  190  [   -]  GETUPVAL   25 26
+  191  [   -]  LEN        25 25
+  192  [   -]  POW        24 24 25
+  193  [   -]  MOD        23 23 24
+  194  [   -]  SETTABUP   25 21 23
+  195  [   -]  TFORCALL   18 2
+  196  [   -]  TFORLOOP   20 -35        ; → 162
+  197  [   -]  GETUPVAL   18 23
+  198  [   -]  TEST       18 0
+  199  [   -]  JMP        0 259         ; → 459
+  200  [   -]  GETUPVAL   18 28
+  201  [   -]  NEWTABLE   19 0 0
+  202  [   -]  SETTABUP   27 18 19
+  203  [   -]  LOADK      18 3          ; 0
+  204  [   -]  LOADK      19 17         ; 64
+  205  [   -]  NEWTABLE   20 0 0
+  206  [   -]  NEWTABLE   21 0 0
+  207  [   -]  LOADK      22 3          ; 0
+  208  [   -]  LOADK      23 4          ; 255
+  209  [   -]  LOADK      24 5          ; 1
+  210  [   -]  FORPREP    22 15         ; → 226
+  211  [   -]  LOADNIL    26 0
+  212  [   -]  GETUPVAL   27 22
+  213  [   -]  GETUPVAL   28 12
+  214  [   -]  LOADNIL    29 0
+  215  [   -]  JMP        0 5           ; → 221
+  216  [   -]  TESTSET    32 26 1
+  217  [   -]  JMP        0 1           ; → 219
+  218  [   -]  MOVE       32 25
+  219  [   -]  GETTABUP   33 25 30
+  220  [   -]  BXOR       26 32 33
+  221  [   -]  TFORCALL   27 2
+  222  [   -]  TFORLOOP   29 -7         ; → 216
+  223  [   -]  GETTABUP   27 8 26
+  224  [   -]  GETTABUP   28 8 25
+  225  [   -]  SETTABLE   20 27 28
+  226  [   -]  FORLOOP    22 -16        ; → 211
+  227  [   -]  LOADK      22 18         ; 97
+  228  [   -]  LOADK      23 12         ; 106
+  229  [   -]  LOADK      24 5          ; 1
+  230  [   -]  FORPREP    22 41         ; → 272
+  231  [   -]  GETTABUP   26 8 25
+  232  [   -]  NEWTABLE   27 0 0
+  233  [   -]  SETTABLE   21 26 27
+  234  [   -]  MOVE       27 18
+  235  [   -]  GETUPVAL   28 18
+  236  [   -]  LEN        28 28
+  237  [   -]  LEN        29 8
+  238  [   -]  POW        28 28 29
+  239  [   -]  ADD        28 18 28
+  240  [   -]  LOADK      29 5          ; 1
+  241  [   -]  FORPREP    27 28         ; → 270
+  242  [   -]  GETUPVAL   31 29
+  243  [   -]  LEN        31 31
+  244  [   -]  GETUPVAL   32 30
+  245  [   -]  LEN        32 32
+  246  [   -]  POW        31 31 32
+  247  [   -]  LT         0 30 31
+  248  [   -]  JMP        0 3           ; → 252
+  249  [   -]  GETTABUP   31 8 30
+  250  [   -]  TEST       31 1
+  251  [   -]  JMP        0 1           ; → 253
+  252  [   -]  LOADNIL    31 0
+  253  [   -]  TEST       31 0
+  254  [   -]  JMP        0 16          ; → 271
+  255  [   -]  LT         0 275 19      ; B=89
+  256  [   -]  JMP        0 6           ; → 263
+  257  [   -]  GETUPVAL   32 30
+  258  [   -]  LEN        32 32
+  259  [   -]  LEN        33 8
+  260  [   -]  POW        32 32 33
+  261  [   -]  TEST       32 1
+  262  [   -]  JMP        0 1           ; → 264
+  263  [   -]  MOVE       32 19
+  264  [   -]  ADD        19 32 261     ; C=1
+  265  [   -]  GETTABLE   32 21 26
+  266  [   -]  GETTABUP   33 8 19
+  267  [   -]  GETTABUP   34 8 30
+  268  [   -]  GETTABLE   34 20 34
+  269  [   -]  SETTABLE   32 33 34
+  270  [   -]  FORLOOP    27 -29        ; → 242
+  271  [   -]  ADD        18 18 276     ; C=26
+  272  [   -]  FORLOOP    22 -42        ; → 231
+  273  [   -]  CLOSURE    22 2          ; função #2
+  274  [   -]  CLOSURE    23 3          ; função #3
+  275  [   -]  GETUPVAL   24 7
+  276  [   -]  SETTABUP   27 24 22
+  277  [   -]  NEWTABLE   24 0 0
+  278  [   -]  NEWTABLE   25 0 0
+  279  [   -]  NEWTABLE   26 0 0
+  280  [   -]  GETUPVAL   27 31
+  281  [   -]  GETTABUP   27 3 27
+  282  [   -]  NEWTABLE   28 0 0
+  283  [   -]  SETTABLE   25 27 28
+  284  [   -]  LEN        27 16
+  285  [   -]  LEN        28 7
+  286  [   -]  SETTABLE   26 27 28
+  287  [   -]  GETUPVAL   27 32
+  288  [   -]  GETUPVAL   28 32
+  289  [   -]  CALL       27 2 2
+  290  [   -]  SETTABLE   26 27 7
+  291  [   -]  GETUPVAL   27 22
+  292  [   -]  GETUPVAL   28 33
+  293  [   -]  GETTABUP   28 6 28
+  294  [   -]  MOVE       29 15
+  295  [   -]  CALL       28 2 3
+  296  [   -]  JMP        0 2           ; → 299
+  297  [   -]  CLOSURE    32 4          ; função #4
+  298  [   -]  SETTABLE   24 30 32
+  299  [   -]  TFORCALL   27 2
+  300  [   -]  TFORLOOP   29 -4         ; → 297
+  301  [   -]  LOADNIL    27 0
+  302  [   -]  NEWTABLE   28 0 0
+  303  [   -]  GETUPVAL   29 33
+  304  [   -]  GETUPVAL   30 34
+  305  [   -]  SETTABLE   28 29 30
+  306  [   -]  GETUPVAL   29 14
+  307  [   -]  GETTABUP   29 1 29
+  308  [   -]  GETUPVAL   30 35
+  309  [   -]  GETUPVAL   31 29
+  310  [   -]  LEN        31 31
+  311  [   -]  GETUPVAL   32 36
+  312  [   -]  LEN        32 32
+  313  [   -]  DIV        31 31 32
+  314  [   -]  GETUPVAL   32 37
+  315  [   -]  LEN        32 32
+  316  [   -]  LEN        33 8
+  317  [   -]  DIV        32 32 33
+  318  [   -]  CALL       29 4 2
+  319  [   -]  LOADNIL    30 2
+  320  [   -]  GETUPVAL   33 22
+  321  [   -]  GETUPVAL   34 28
+  322  [   -]  LOADNIL    35 0
+  323  [   -]  JMP        0 113         ; → 437
+  324  [   -]  GETUPVAL   38 32
+  325  [   -]  MOVE       39 37
+  326  [   -]  CALL       38 2 2
+  327  [   -]  GETUPVAL   39 38
+  328  [   -]  EQ         1 38 39
+  329  [   -]  JMP        0 3           ; → 333
+  330  [   -]  GETTABLE   38 28 36
+  331  [   -]  TEST       38 0
+  332  [   -]  JMP        37 104        ; → 437
+  333  [   -]  GETUPVAL   38 22
+  334  [   -]  GETTABLE   39 28 36
+  335  [   -]  TEST       39 0
+  336  [   -]  JMP        0 2           ; → 339
+  337  [   -]  TESTSET    39 28 1
+  338  [   -]  JMP        0 1           ; → 340
+  339  [   -]  MOVE       39 37
+  340  [   -]  LOADNIL    40 0
+  341  [   -]  JMP        0 92          ; → 434
+  342  [   -]  CLOSURE    43 5          ; função #5
+  343  [   -]  GETTABLE   44 28 36
+  344  [   -]  TEST       44 0
+  345  [   -]  JMP        0 47          ; → 393
+  346  [   -]  SETTABUP   28 36 43
+  347  [   -]  GETUPVAL   44 31
+  348  [   -]  GETTABUP   44 3 44
+  349  [   -]  GETTABLE   44 25 44
+  350  [   -]  GETUPVAL   45 31
+  351  [   -]  GETTABUP   45 3 45
+  352  [   -]  GETTABLE   45 25 45
+  353  [   -]  GETTABLE   45 45 36
+  354  [   -]  TEST       45 1
+  355  [   -]  JMP        0 1           ; → 357
+  356  [   -]  NEWTABLE   45 0 0
+  357  [   -]  SETTABLE   44 36 45
+  358  [   -]  GETUPVAL   44 31
+  359  [   -]  GETTABUP   44 3 44
+  360  [   -]  GETTABLE   44 25 44
+  361  [   -]  GETTABLE   44 44 36
+  362  [   -]  SETTABLE   44 41 37
+  363  [   -]  GETUPVAL   44 22
+  364  [   -]  MOVE       45 24
+  365  [   -]  LOADNIL    46 0
+  366  [   -]  JMP        0 23          ; → 390
+  367  [   -]  GETUPVAL   49 14
+  368  [   -]  GETTABUP   49 1 49
+  369  [   -]  MOVE       50 41
+  370  [   -]  LEN        51 12
+  371  [   -]  CALL       49 3 2
+  372  [   -]  MOVE       50 29
+  373  [   -]  MOVE       51 29
+  374  [   -]  MOVE       52 49
+  375  [   -]  CONCAT     29 50 52
+  376  [   -]  GETUPVAL   50 14
+  377  [   -]  GETTABUP   50 1 50
+  378  [   -]  MOVE       51 47
+  379  [   -]  GETUPVAL   52 29
+  380  [   -]  LEN        52 52
+  381  [   -]  GETUPVAL   53 36
+  382  [   -]  LEN        53 53
+  383  [   -]  DIV        52 52 53
+  384  [   -]  GETUPVAL   53 37
+  385  [   -]  LEN        53 53
+  386  [   -]  CALL       50 4 2
+  387  [   -]  MOVE       51 49
+  388  [   -]  CONCAT     27 50 51
+  389  [   -]  SETTABLE   24 27 43
+  390  [   -]  TFORCALL   44 2
+  391  [   -]  TFORLOOP   46 -25        ; → 367
+  392  [   -]  JMP        42 41         ; → 434
+  393  [   -]  GETTABUP   44 28 36
+  394  [   -]  GETTABLE   45 28 41
+  395  [   -]  TEST       45 1
+  396  [   -]  JMP        0 3           ; → 400
+  397  [   -]  GETTABUP   45 27 41
+  398  [   -]  TEST       45 0
+  399  [   -]  JMP        0 2           ; → 402
+  400  [   -]  TESTSET    45 43 1
+  401  [   -]  JMP        0 1           ; → 403
+  402  [   -]  MOVE       45 42
+  403  [   -]  SETTABLE   44 41 45
+  404  [   -]  MOVE       44 22
+  405  [   -]  CALL       44 1 2
+  406  [   -]  GETUPVAL   45 32
+  407  [   -]  MOVE       46 42
+  408  [   -]  CALL       45 2 2
+  409  [   -]  GETTABLE   45 26 45
+  410  [   -]  TEST       45 0
+  411  [   -]  JMP        0 2           ; → 414
+  412  [   -]  TESTSET    45 43 1
+  413  [   -]  JMP        0 1           ; → 415
+  414  [   -]  MOVE       45 42
+  415  [   -]  SETTABLE   25 44 45
+  416  [   -]  CLOSURE    44 6          ; função #6
+  417  [   -]  GETUPVAL   45 31
+  418  [   -]  GETTABUP   45 3 45
+  419  [   -]  GETTABLE   45 25 45
+  420  [   -]  GETUPVAL   46 31
+  421  [   -]  GETTABUP   46 3 46
+  422  [   -]  GETTABLE   46 25 46
+  423  [   -]  GETTABLE   46 46 36
+  424  [   -]  TEST       46 1
+  425  [   -]  JMP        0 1           ; → 427
+  426  [   -]  NEWTABLE   46 0 0
+  427  [   -]  SETTABLE   45 36 46
+  428  [   -]  GETUPVAL   45 31
+  429  [   -]  GETTABUP   45 3 45
+  430  [   -]  GETTABLE   45 25 45
+  431  [   -]  GETTABLE   45 45 36
+  432  [   -]  SETTABLE   45 41 44
+  433  [   -]  JMP        42 0          ; → 434
+  434  [   -]  TFORCALL   38 2
+  435  [   -]  TFORLOOP   40 -94        ; → 342
+  436  [   -]  JMP        37 0          ; → 437
+  437  [   -]  TFORCALL   33 2
+  438  [   -]  TFORLOOP   35 -115       ; → 324
+  439  [   -]  GETUPVAL   33 45
+  440  [   -]  GETUPVAL   34 28
+  441  [   -]  MOVE       35 24
+  442  [   -]  CALL       33 3 2
+  443  [   -]  NEWTABLE   34 0 0
+  444  [   -]  GETUPVAL   35 31
+  445  [   -]  GETTABUP   35 3 35
+  446  [   -]  NEWTABLE   36 0 0
+  447  [   -]  SETTABLE   34 35 36
+  448  [   -]  GETUPVAL   35 31
+  449  [   -]  GETTABUP   35 3 35
+  450  [   -]  GETTABLE   35 34 35
+  451  [   -]  NEWTABLE   36 0 0
+  452  [   -]  SETTABLE   35 0 36
+  453  [   -]  GETUPVAL   35 27
+  454  [   -]  CLOSURE    36 7          ; função #7
+  455  [   -]  SETTABLE   25 35 36
+  456  [   -]  GETUPVAL   35 28
+  457  [   -]  SETTABUP   28 277 35     ; B=&quot;_G&quot;
+  458  [   -]  JMP        19 0          ; → 459
+  459  [   -]  GETUPVAL   18 23
+  460  [   -]  LEN        18 18
+  461  [   -]  GETUPVAL   19 20
+  462  [   -]  LEN        19 19
+  463  [   -]  SETUPVAL   19 49
+  464  [   -]  SETUPVAL   18 48
+  465  [   -]  GETUPVAL   18 46
+  466  [   -]  TEST       18 0
+  467  [   -]  JMP        0 4           ; → 472
+  468  [   -]  GETUPVAL   18 27
+  469  [   -]  GETTABUP   18 28 18
+  470  [   -]  VARARG     19 0
+  471  [   -]  CALL       18 0 2
+  472  [   -]  LOADNIL    19 0
+  473  [   -]  SETUPVAL   19 46
+  474  [   -]  RETURN     18 2
+  475  [   -]  RETURN     0 1
+constantes:
+  K0	&quot;A3E0D35B&quot;
+  K1	4294967295
+  K2	3988292384
+  K3	0
+  K4	255
+  K5	1
+  K6	8
+  K7	&quot;....&quot;
+  K8	&quot;&quot;
+  K9	&quot;.&quot;
+  K10	&quot;%08X&quot;
+  K11	65
+  K12	106
+  K13	91
+  K14	96
+  K15	&quot;%l%u%a+%d+hN?&quot;
+  K16	&quot;%d+&quot;
+  K17	64
+  K18	97
+  K19	89
+  K20	26
+  K21	&quot;_G&quot;
+upvalues:
+  0	?	instack=1 idx=147
+  1	?	instack=1 idx=100
+  2	?	instack=1 idx=129
+  3	?	instack=1 idx=114
+  4	?	instack=1 idx=125
+  5	?	instack=1 idx=11
+  6	?	instack=1 idx=81
+  7	?	instack=1 idx=73
+  8	?	instack=1 idx=3
+  9	?	instack=1 idx=134
+  10	?	instack=1 idx=138
+  11	?	instack=1 idx=7
+  12	?	instack=1 idx=4
+  13	?	instack=1 idx=66
+  14	?	instack=1 idx=144
+  15	?	instack=1 idx=145
+  16	?	instack=1 idx=111
+  17	?	instack=1 idx=103
+  18	?	instack=1 idx=133
+  19	?	instack=1 idx=6
+  20	?	instack=1 idx=10
+  21	?	instack=1 idx=63
+  22	?	instack=1 idx=95
+  23	?	instack=1 idx=8
+  24	?	instack=1 idx=5
+  25	?	instack=1 idx=9
+  26	?	instack=1 idx=140
+  27	?	instack=1 idx=48
+  28	?	instack=0 idx=0
+  29	?	instack=1 idx=22
+  30	?	instack=1 idx=65
+  31	?	instack=1 idx=122
+  32	?	instack=1 idx=109
+  33	?	instack=1 idx=24
+  34	?	instack=1 idx=88
+  35	?	instack=1 idx=41
+  36	?	instack=1 idx=26
+  37	?	instack=1 idx=27
+  38	?	instack=1 idx=15
+  39	?	instack=1 idx=36
+  40	?	instack=1 idx=130
+  41	?	instack=1 idx=82
+  42	?	instack=1 idx=49
+  43	?	instack=1 idx=86
+  44	?	instack=1 idx=61
+  45	?	instack=1 idx=87
+  46	?	instack=1 idx=146
+  47	?	instack=1 idx=121
+  48	?	instack=1 idx=0
+  49	?	instack=1 idx=1
+</pre></details><details><summary>função main/2/0 · ?:148-150 · 10 instruções</summary><pre>=== função main/2/0 · ?:148-150 · 10 instruções ===
+params=1 vararg=0 slots=4 upvalues=3 constantes=2 funções=0
+    1  [   -]  GETUPVAL   1 0
+    2  [   -]  SHR        1 1 256       ; C=8
+    3  [   -]  GETUPVAL   2 0
+    4  [   -]  BAND       2 2 257       ; C=255
+    5  [   -]  GETTABUP   3 2 0
+    6  [   -]  BXOR       2 2 3
+    7  [   -]  GETTABUP   2 1 2
+    8  [   -]  BXOR       1 1 2
+    9  [   -]  SETUPVAL   1 0
+   10  [   -]  RETURN     0 1
+constantes:
+  K0	8
+  K1	255
+upvalues:
+  0	?	instack=1 idx=2
+  1	?	instack=1 idx=4
+  2	?	instack=1 idx=5
+</pre></details><details><summary>função main/2/1 · ?:163-171 · 7 instruções</summary><pre>=== função main/2/1 · ?:163-171 · 7 instruções ===
+params=1 vararg=0 slots=5 upvalues=7 constantes=1 funções=1
+    1  [   -]  GETUPVAL   1 1
+    2  [   -]  GETTABUP   1 0 1
+    3  [   -]  MOVE       2 0
+    4  [   -]  LOADK      3 0           ; &quot;%a&quot;
+    5  [   -]  CLOSURE    4 0           ; função #0
+    6  [   -]  CALL       1 4 1
+    7  [   -]  RETURN     0 1
+constantes:
+  K0	&quot;%a&quot;
+upvalues:
+  0	?	instack=0 idx=1
+  1	?	instack=0 idx=9
+  2	?	instack=0 idx=11
+  3	?	instack=1 idx=2
+  4	?	instack=0 idx=14
+  5	?	instack=0 idx=15
+  6	?	instack=0 idx=2
+</pre></details><details><summary>função main/2/1/0 · ?:165-170 · 27 instruções</summary><pre>=== função main/2/1/0 · ?:165-170 · 27 instruções ===
+params=1 vararg=0 slots=5 upvalues=6 constantes=0 funções=0
+    1  [   -]  GETTABUP   1 0 0
+    2  [   -]  TEST       1 0
+    3  [   -]  JMP        0 23          ; → 27
+    4  [   -]  GETUPVAL   1 1
+    5  [   -]  GETTABUP   2 0 0
+    6  [   -]  GETUPVAL   3 2
+    7  [   -]  LEN        3 3
+    8  [   -]  GETUPVAL   4 3
+    9  [   -]  LEN        4 4
+   10  [   -]  ADD        3 3 4
+   11  [   -]  GETUPVAL   4 4
+   12  [   -]  LEN        4 4
+   13  [   -]  POW        3 3 4
+   14  [   -]  MOD        2 2 3
+   15  [   -]  GETUPVAL   3 5
+   16  [   -]  LEN        3 3
+   17  [   -]  MOD        2 2 3
+   18  [   -]  ADD        1 1 2
+   19  [   -]  SETUPVAL   1 1
+   20  [   -]  GETUPVAL   1 1
+   21  [   -]  GETTABUP   2 0 0
+   22  [   -]  GETUPVAL   3 4
+   23  [   -]  LEN        3 3
+   24  [   -]  MUL        2 2 3
+   25  [   -]  BXOR       1 1 2
+   26  [   -]  SETUPVAL   1 1
+   27  [   -]  RETURN     0 1
+upvalues:
+  0	?	instack=0 idx=2
+  1	?	instack=0 idx=3
+  2	?	instack=0 idx=4
+  3	?	instack=0 idx=5
+  4	?	instack=1 idx=0
+  5	?	instack=0 idx=6
+</pre></details><details><summary>função main/2/2 · ?:208-214 · 18 instruções</summary><pre>=== função main/2/2 · ?:208-214 · 18 instruções ===
+params=0 vararg=0 slots=9 upvalues=3 constantes=5 funções=0
+    1  [   -]  LOADNIL    0 0
+    2  [   -]  LOADK      1 0           ; 1
+    3  [   -]  LOADK      2 1           ; 6
+    4  [   -]  LOADK      3 0           ; 1
+    5  [   -]  FORPREP    1 10          ; → 16
+    6  [   -]  TESTSET    5 0 1
+    7  [   -]  JMP        0 1           ; → 9
+    8  [   -]  LOADK      5 2           ; &quot;&quot;
+    9  [   -]  GETUPVAL   6 2
+   10  [   -]  GETTABUP   6 1 6
+   11  [   -]  LOADK      7 3           ; 97
+   12  [   -]  LOADK      8 4           ; 122
+   13  [   -]  CALL       6 3 2
+   14  [   -]  GETTABUP   6 0 6
+   15  [   -]  CONCAT     0 5 6
+   16  [   -]  FORLOOP    1 -11         ; → 6
+   17  [   -]  RETURN     0 2
+   18  [   -]  RETURN     0 1
+constantes:
+  K0	1
+  K1	6
+  K2	&quot;&quot;
+  K3	97
+  K4	122
+upvalues:
+  0	?	instack=0 idx=8
+  1	?	instack=0 idx=17
+  2	?	instack=1 idx=14
+</pre></details><details><summary>função main/2/3 · ?:215-221 · 14 instruções</summary><pre>=== função main/2/3 · ?:215-221 · 14 instruções ===
+params=0 vararg=1 slots=8 upvalues=2 constantes=1 funções=0
+    1  [   -]  LOADK      0 0           ; &quot;&quot;
+    2  [   -]  GETUPVAL   1 0
+    3  [   -]  NEWTABLE   2 0 0
+    4  [   -]  VARARG     3 0
+    5  [   -]  SETLIST    2 0 1
+    6  [   -]  LOADNIL    3 0
+    7  [   -]  JMP        0 3           ; → 11
+    8  [   -]  MOVE       6 0
+    9  [   -]  GETTABUP   7 1 5
+   10  [   -]  CONCAT     0 6 7
+   11  [   -]  TFORCALL   1 2
+   12  [   -]  TFORLOOP   3 -5          ; → 8
+   13  [   -]  RETURN     0 2
+   14  [   -]  RETURN     0 1
+constantes:
+  K0	&quot;&quot;
+upvalues:
+  0	?	instack=0 idx=22
+  1	?	instack=0 idx=8
+</pre></details><details><summary>função main/2/4 · ?:230-235 · 20 instruções</summary><pre>=== função main/2/4 · ?:230-235 · 20 instruções ===
+params=2 vararg=0 slots=7 upvalues=3 constantes=0 funções=0
+    1  [   -]  GETUPVAL   2 0
+    2  [   -]  TEST       2 1
+    3  [   -]  JMP        0 7           ; → 11
+    4  [   -]  GETTABUP   2 1 1
+    5  [   -]  TEST       2 1
+    6  [   -]  JMP        0 2           ; → 9
+    7  [   -]  TESTSET    2 1 1
+    8  [   -]  JMP        0 1           ; → 10
+    9  [   -]  LOADNIL    2 0
+   10  [   -]  RETURN     2 2
+   11  [   -]  GETTABUP   2 0 1
+   12  [   -]  TEST       2 1
+   13  [   -]  JMP        0 5           ; → 19
+   14  [   -]  GETUPVAL   2 2
+   15  [   -]  GETTABUP   2 0 2
+   16  [   -]  LOADNIL    3 2
+   17  [   -]  MOVE       6 1
+   18  [   -]  CALL       2 5 2
+   19  [   -]  RETURN     2 2
+   20  [   -]  RETURN     0 1
+upvalues:
+  0	?	instack=1 idx=25
+  1	?	instack=1 idx=24
+  2	?	instack=0 idx=27
+</pre></details><details><summary>função main/2/5 · ?:245-251 · 50 instruções</summary><pre>=== função main/2/5 · ?:245-251 · 50 instruções ===
+params=1 vararg=1 slots=4 upvalues=14 constantes=0 funções=0
+    1  [   -]  GETUPVAL   1 0
+    2  [   -]  GETUPVAL   2 1
+    3  [   -]  EQ         0 1 2
+    4  [   -]  JMP        0 9           ; → 14
+    5  [   -]  GETUPVAL   1 2
+    6  [   -]  GETUPVAL   2 3
+    7  [   -]  EQ         0 1 2
+    8  [   -]  JMP        0 5           ; → 14
+    9  [   -]  GETUPVAL   1 4
+   10  [   -]  MOVE       2 0
+   11  [   -]  VARARG     3 0
+   12  [   -]  TAILCALL   1 0 0
+   13  [   -]  RETURN     1 0
+   14  [   -]  GETUPVAL   1 6
+   15  [   -]  GETUPVAL   2 7
+   16  [   -]  SETTABUP   5 1 2
+   17  [   -]  GETUPVAL   1 10
+   18  [   -]  GETTABUP   1 9 1
+   19  [   -]  GETUPVAL   2 11
+   20  [   -]  LEN        2 2
+   21  [   -]  CALL       1 2 2
+   22  [   -]  GETUPVAL   2 12
+   23  [   -]  GETTABLE   1 1 2
+   24  [   -]  GETTABUP   1 8 1
+   25  [   -]  GETUPVAL   2 0
+   26  [   -]  GETTABLE   1 1 2
+   27  [   -]  GETUPVAL   2 2
+   28  [   -]  GETTABLE   1 1 2
+   29  [   -]  TESTSET    2 0 1
+   30  [   -]  JMP        0 1           ; → 32
+   31  [   -]  GETUPVAL   2 13
+   32  [   -]  GETTABUP   2 5 2
+   33  [   -]  TEST       2 0
+   34  [   -]  JMP        0 5           ; → 40
+   35  [   -]  NEWTABLE   2 1 0
+   36  [   -]  NEWTABLE   3 0 0
+   37  [   -]  SETLIST    2 1 1
+   38  [   -]  TEST       2 1
+   39  [   -]  JMP        0 7           ; → 47
+   40  [   -]  TEST       0 0
+   41  [   -]  JMP        0 4           ; → 46
+   42  [   -]  GETUPVAL   2 2
+   43  [   -]  GETTABUP   2 5 2
+   44  [   -]  TEST       2 1
+   45  [   -]  JMP        0 1           ; → 47
+   46  [   -]  MOVE       2 0
+   47  [   -]  VARARG     3 0
+   48  [   -]  TAILCALL   1 0 0
+   49  [   -]  RETURN     1 0
+   50  [   -]  RETURN     0 1
+upvalues:
+  0	?	instack=1 idx=36
+  1	?	instack=0 idx=39
+  2	?	instack=1 idx=41
+  3	?	instack=0 idx=40
+  4	?	instack=1 idx=23
+  5	?	instack=0 idx=27
+  6	?	instack=0 idx=28
+  7	?	instack=0 idx=5
+  8	?	instack=1 idx=25
+  9	?	instack=0 idx=6
+  10	?	instack=0 idx=13
+  11	?	instack=1 idx=10
+  12	?	instack=0 idx=31
+  13	?	instack=1 idx=37
+</pre></details><details><summary>função main/2/6 · ?:265-286 · 127 instruções</summary><pre>=== função main/2/6 · ?:265-286 · 127 instruções ===
+params=1 vararg=1 slots=11 upvalues=18 constantes=8 funções=1
+    1  [   -]  GETUPVAL   1 0
+    2  [   -]  TEST       1 1
+    3  [   -]  JMP        0 7           ; → 11
+    4  [   -]  GETUPVAL   1 1
+    5  [   -]  TEST       1 0
+    6  [   -]  JMP        0 4           ; → 11
+    7  [   -]  GETUPVAL   1 3
+    8  [   -]  GETTABUP   1 2 1
+    9  [   -]  GETUPVAL   2 2
+   10  [   -]  GETTABLE   1 1 2
+   11  [   -]  SETUPVAL   1 0
+   12  [   -]  GETUPVAL   1 1
+   13  [   -]  TEST       1 1
+   14  [   -]  JMP        0 4           ; → 19
+   15  [   -]  GETUPVAL   1 3
+   16  [   -]  GETTABUP   1 2 1
+   17  [   -]  GETUPVAL   2 2
+   18  [   -]  GETTABLE   1 1 2
+   19  [   -]  SETUPVAL   1 1
+   20  [   -]  GETUPVAL   1 0
+   21  [   -]  TEST       1 0
+   22  [   -]  JMP        0 13          ; → 36
+   23  [   -]  GETUPVAL   1 4
+   24  [   -]  GETUPVAL   2 0
+   25  [   -]  NEWTABLE   3 1 0
+   26  [   -]  GETUPVAL   4 1
+   27  [   -]  SETLIST    3 1 1
+   28  [   -]  NEWTABLE   4 0 0
+   29  [   -]  NEWTABLE   5 0 0
+   30  [   -]  CALL       1 5 2
+   31  [   -]  TEST       1 0
+   32  [   -]  JMP        0 3           ; → 36
+   33  [   -]  GETUPVAL   1 1
+   34  [   -]  TEST       1 1
+   35  [   -]  JMP        0 1           ; → 37
+   36  [   -]  GETUPVAL   1 1
+   37  [   -]  SETUPVAL   1 1
+   38  [   -]  GETUPVAL   1 5
+   39  [   -]  TEST       1 0
+   40  [   -]  JMP        0 73          ; → 114
+   41  [   -]  GETUPVAL   1 6
+   42  [   -]  GETTABUP   2 5 256       ; C=1
+   43  [   -]  EQ         0 1 2
+   44  [   -]  JMP        0 69          ; → 114
+   45  [   -]  GETUPVAL   1 3
+   46  [   -]  NEWTABLE   2 0 0
+   47  [   -]  GETUPVAL   3 9
+   48  [   -]  GETTABUP   3 8 3
+   49  [   -]  LOADK      4 1           ; 5
+   50  [   -]  LOADK      5 2           ; 15
+   51  [   -]  CALL       3 3 0
+   52  [   -]  SETLIST    2 0 1
+   53  [   -]  SETTABUP   7 1 2
+   54  [   -]  LOADK      1 0           ; 1
+   55  [   -]  GETUPVAL   2 9
+   56  [   -]  GETTABUP   2 8 2
+   57  [   -]  LOADK      3 3           ; 20
+   58  [   -]  LOADK      4 4           ; 30
+   59  [   -]  CALL       2 3 2
+   60  [   -]  LOADK      3 0           ; 1
+   61  [   -]  FORPREP    1 47          ; → 109
+   62  [   -]  GETTABUP   5 5 261       ; C=2
+   63  [   -]  GETTABUP   5 10 5
+   64  [   -]  CALL       5 1 1
+   65  [   -]  GETUPVAL   5 11
+   66  [   -]  GETUPVAL   6 13
+   67  [   -]  GETTABUP   6 12 6
+   68  [   -]  MOVE       7 0
+   69  [   -]  GETUPVAL   8 15
+   70  [   -]  LEN        8 8
+   71  [   -]  GETUPVAL   9 16
+   72  [   -]  LEN        9 9
+   73  [   -]  MUL        8 8 9
+   74  [   -]  ADD        8 8 256       ; C=1
+   75  [   -]  GETTABUP   8 14 8
+   76  [   -]  GETUPVAL   9 17
+   77  [   -]  LEN        9 9
+   78  [   -]  GETUPVAL   10 17
+   79  [   -]  LEN        10 10
+   80  [   -]  MUL        9 9 10
+   81  [   -]  GETTABUP   9 14 9
+   82  [   -]  CONCAT     8 8 9
+   83  [   -]  CLOSURE    9 0           ; função #0
+   84  [   -]  CALL       6 4 2
+   85  [   -]  VARARG     7 0
+   86  [   -]  CALL       5 0 1
+   87  [   -]  GETUPVAL   5 3
+   88  [   -]  GETTABUP   5 7 5
+   89  [   -]  GETTABLE   5 5 256       ; C=1
+   90  [   -]  EQ         1 4 5
+   91  [   -]  JMP        0 7           ; → 99
+   92  [   -]  GETTABUP   5 5 262       ; C=3
+   93  [   -]  GETTABUP   5 10 5
+   94  [   -]  GETTABUP   6 5 263       ; C=4
+   95  [   -]  GETTABUP   6 10 6
+   96  [   -]  CALL       6 1 0
+   97  [   -]  CALL       5 0 1
+   98  [   -]  JMP        5 10          ; → 109
+   99  [   -]  GETUPVAL   5 3
+  100  [   -]  GETTABUP   5 7 5
+  101  [   -]  GETTABUP   6 5 262       ; C=3
+  102  [   -]  GETTABUP   6 10 6
+  103  [   -]  GETTABUP   7 5 263       ; C=4
+  104  [   -]  GETTABUP   7 10 7
+  105  [   -]  CALL       7 1 0
+  106  [   -]  CALL       6 0 2
+  107  [   -]  SETTABLE   5 261 6       ; B=2
+  108  [   -]  JMP        5 0           ; → 109
+  109  [   -]  FORLOOP    1 -48         ; → 62
+  110  [   -]  GETUPVAL   1 3
+  111  [   -]  GETTABUP   1 7 1
+  112  [   -]  GETTABLE   1 1 261       ; C=2
+  113  [   -]  RETURN     1 2
+  114  [   -]  GETUPVAL   1 3
+  115  [   -]  GETTABUP   1 2 1
+  116  [   -]  GETUPVAL   2 11
+  117  [   -]  GETTABLE   1 1 2
+  118  [   -]  TEST       1 1
+  119  [   -]  JMP        0 1           ; → 121
+  120  [   -]  GETUPVAL   1 5
+  121  [   -]  SETUPVAL   1 5
+  122  [   -]  GETUPVAL   1 11
+  123  [   -]  MOVE       2 0
+  124  [   -]  VARARG     3 0
+  125  [   -]  TAILCALL   1 0 0
+  126  [   -]  RETURN     1 0
+  127  [   -]  RETURN     0 1
+constantes:
+  K0	1
+  K1	5
+  K2	15
+  K3	20
+  K4	30
+  K5	2
+  K6	3
+  K7	4
+upvalues:
+  0	?	instack=1 idx=31
+  1	?	instack=1 idx=30
+  2	?	instack=0 idx=28
+  3	?	instack=1 idx=36
+  4	?	instack=0 idx=41
+  5	?	instack=1 idx=32
+  6	?	instack=1 idx=41
+  7	?	instack=0 idx=42
+  8	?	instack=0 idx=17
+  9	?	instack=1 idx=14
+  10	?	instack=0 idx=43
+  11	?	instack=1 idx=42
+  12	?	instack=0 idx=1
+  13	?	instack=0 idx=9
+  14	?	instack=0 idx=8
+  15	?	instack=0 idx=44
+  16	?	instack=0 idx=15
+  17	?	instack=1 idx=13
+</pre></details><details><summary>função main/2/6/0 · ?:273-275 · 16 instruções</summary><pre>=== função main/2/6/0 · ?:273-275 · 16 instruções ===
+params=1 vararg=0 slots=4 upvalues=5 constantes=3 funções=0
+    1  [   -]  GETUPVAL   1 0
+    2  [   -]  GETUPVAL   2 2
+    3  [   -]  GETTABUP   2 1 2
+    4  [   -]  GETTABLE   2 2 256       ; C=1
+    5  [   -]  EQ         1 1 2
+    6  [   -]  JMP        0 7           ; → 14
+    7  [   -]  GETUPVAL   1 4
+    8  [   -]  GETTABUP   1 3 1
+    9  [   -]  LOADK      2 1           ; 0
+   10  [   -]  LOADK      3 2           ; 9
+   11  [   -]  CALL       1 3 2
+   12  [   -]  TEST       1 1
+   13  [   -]  JMP        0 1           ; → 15
+   14  [   -]  MOVE       1 0
+   15  [   -]  RETURN     1 2
+   16  [   -]  RETURN     0 1
+constantes:
+  K0	1
+  K1	0
+  K2	9
+upvalues:
+  0	?	instack=1 idx=4
+  1	?	instack=0 idx=7
+  2	?	instack=0 idx=3
+  3	?	instack=0 idx=8
+  4	?	instack=0 idx=9
+</pre></details><details><summary>função main/2/7 · ?:298-328 · 175 instruções</summary><pre>=== função main/2/7 · ?:298-328 · 175 instruções ===
+params=4 vararg=0 slots=11 upvalues=22 constantes=3 funções=1
+    1  [   -]  TEST       3 0
+    2  [   -]  JMP        0 47          ; → 50
+    3  [   -]  GETUPVAL   4 1
+    4  [   -]  GETTABUP   4 0 4
+    5  [   -]  MOVE       5 3
+    6  [   -]  LOADK      6 0           ; &quot;(%l%a+)(%d+)h(N?)&quot;
+    7  [   -]  CALL       4 3 4
+    8  [   -]  MOVE       2 6
+    9  [   -]  MOVE       0 5
+   10  [   -]  MOVE       1 4
+   11  [   -]  TEST       0 1
+   12  [   -]  JMP        0 18          ; → 31
+   13  [   -]  TEST       1 1
+   14  [   -]  JMP        0 16          ; → 31
+   15  [   -]  GETUPVAL   4 2
+   16  [   -]  TEST       4 0
+   17  [   -]  JMP        0 13          ; → 31
+   18  [   -]  LOADNIL    4 1
+   19  [   -]  SETUPVAL   5 4
+   20  [   -]  SETUPVAL   4 3
+   21  [   -]  SETTABUP   5 3 3
+   22  [   -]  GETUPVAL   4 2
+   23  [   -]  GETUPVAL   5 6
+   24  [   -]  EQ         1 4 5
+   25  [   -]  JMP        0 2           ; → 28
+   26  [   -]  GETUPVAL   4 7
+   27  [   -]  JMP        0 2           ; → 30
+   28  [   -]  LOADBOOL   4 0 1
+   29  [   -]  LOADBOOL   4 1 0
+   30  [   -]  RETURN     4 2
+   31  [   -]  TEST       2 0
+   32  [   -]  JMP        0 3           ; → 36
+   33  [   -]  LEN        4 2
+   34  [   -]  TEST       4 1
+   35  [   -]  JMP        0 1           ; → 37
+   36  [   -]  LOADK      4 1           ; 0
+   37  [   -]  LT         0 257 4       ; B=0
+   38  [   -]  JMP        0 3           ; → 42
+   39  [   -]  LOADK      4 1           ; 0
+   40  [   -]  TESTSET    2 4 1
+   41  [   -]  JMP        0 1           ; → 43
+   42  [   -]  LOADNIL    2 0
+   43  [   -]  TEST       0 0
+   44  [   -]  JMP        0 2           ; → 47
+   45  [   -]  TEST       1 1
+   46  [   -]  JMP        0 1           ; → 48
+   47  [   -]  RETURN     0 1
+   48  [   -]  LOADNIL    4 0
+   49  [   -]  SETUPVAL   4 2
+   50  [   -]  LOADNIL    4 1
+   51  [   -]  GETUPVAL   6 9
+   52  [   -]  GETTABUP   6 8 6
+   53  [   -]  GETTABUP   6 4 6
+   54  [   -]  GETUPVAL   7 10
+   55  [   -]  GETTABLE   6 6 7
+   56  [   -]  GETUPVAL   7 9
+   57  [   -]  GETTABUP   7 8 7
+   58  [   -]  GETTABUP   7 4 7
+   59  [   -]  GETUPVAL   8 10
+   60  [   -]  GETTABLE   7 7 8
+   61  [   -]  GETTABLE   7 7 0
+   62  [   -]  TEST       7 1
+   63  [   -]  JMP        0 13          ; → 77
+   64  [   -]  GETUPVAL   7 11
+   65  [   -]  GETTABUP   7 0 7
+   66  [   -]  MOVE       8 1
+   67  [   -]  LOADK      9 2           ; &quot;([%l]?)(%u)&quot;
+   68  [   -]  CLOSURE    10 0          ; função #0
+   69  [   -]  CALL       7 4 2
+   70  [   -]  TEST       7 0
+   71  [   -]  JMP        0 5           ; → 77
+   72  [   -]  GETUPVAL   7 13
+   73  [   -]  GETTABUP   7 5 7
+   74  [   -]  TEST       7 0
+   75  [   -]  JMP        0 1           ; → 77
+   76  [   -]  MOVE       7 5
+   77  [   -]  SETTABLE   6 0 7
+   78  [   -]  GETUPVAL   6 2
+   79  [   -]  TEST       6 0
+   80  [   -]  JMP        0 55          ; → 136
+   81  [   -]  GETUPVAL   6 16
+   82  [   -]  GETTABUP   6 15 6
+   83  [   -]  GETUPVAL   7 17
+   84  [   -]  LEN        7 7
+   85  [   -]  CALL       6 2 2
+   86  [   -]  GETUPVAL   7 9
+   87  [   -]  GETTABLE   6 6 7
+   88  [   -]  GETTABUP   6 4 6
+   89  [   -]  GETUPVAL   7 10
+   90  [   -]  GETTABLE   6 6 7
+   91  [   -]  GETTABLE   6 6 0
+   92  [   -]  GETTABUP   6 14 6
+   93  [   -]  TEST       6 0
+   94  [   -]  JMP        0 3           ; → 98
+   95  [   -]  GETUPVAL   6 2
+   96  [   -]  TEST       6 1
+   97  [   -]  JMP        0 1           ; → 99
+   98  [   -]  GETUPVAL   6 6
+   99  [   -]  SETUPVAL   6 2
+  100  [   -]  GETUPVAL   6 18
+  101  [   -]  TEST       6 0
+  102  [   -]  JMP        0 14          ; → 117
+  103  [   -]  GETUPVAL   6 16
+  104  [   -]  GETTABUP   6 15 6
+  105  [   -]  GETUPVAL   7 17
+  106  [   -]  LEN        7 7
+  107  [   -]  CALL       6 2 2
+  108  [   -]  GETUPVAL   7 9
+  109  [   -]  GETTABLE   6 6 7
+  110  [   -]  GETTABUP   6 4 6
+  111  [   -]  GETUPVAL   7 10
+  112  [   -]  GETTABLE   6 6 7
+  113  [   -]  GETTABLE   6 6 0
+  114  [   -]  GETTABUP   6 14 6
+  115  [   -]  TEST       6 1
+  116  [   -]  JMP        0 17          ; → 134
+  117  [   -]  GETUPVAL   6 18
+  118  [   -]  TEST       6 1
+  119  [   -]  JMP        0 12          ; → 132
+  120  [   -]  GETUPVAL   6 16
+  121  [   -]  GETTABUP   6 15 6
+  122  [   -]  GETUPVAL   7 17
+  123  [   -]  LEN        7 7
+  124  [   -]  CALL       6 2 2
+  125  [   -]  GETUPVAL   7 9
+  126  [   -]  GETTABLE   6 6 7
+  127  [   -]  GETTABUP   6 4 6
+  128  [   -]  GETUPVAL   7 10
+  129  [   -]  GETTABLE   6 6 7
+  130  [   -]  GETTABLE   6 6 0
+  131  [   -]  JMP        0 2           ; → 134
+  132  [   -]  LOADBOOL   6 0 1
+  133  [   -]  LOADBOOL   6 1 0
+  134  [   -]  RETURN     6 2
+  135  [   -]  JMP        0 39          ; → 175
+  136  [   -]  GETUPVAL   6 16
+  137  [   -]  GETTABUP   6 15 6
+  138  [   -]  GETUPVAL   7 20
+  139  [   -]  LEN        7 7
+  140  [   -]  CALL       6 2 2
+  141  [   -]  GETUPVAL   7 21
+  142  [   -]  GETTABLE   6 6 7
+  143  [   -]  LEN        6 6
+  144  [   -]  GETTABUP   6 19 6
+  145  [   -]  TEST       6 0
+  146  [   -]  JMP        0 28          ; → 175
+  147  [   -]  TEST       2 0
+  148  [   -]  JMP        0 14          ; → 163
+  149  [   -]  GETUPVAL   6 16
+  150  [   -]  GETTABUP   6 15 6
+  151  [   -]  GETUPVAL   7 17
+  152  [   -]  LEN        7 7
+  153  [   -]  CALL       6 2 2
+  154  [   -]  GETUPVAL   7 9
+  155  [   -]  GETTABLE   6 6 7
+  156  [   -]  GETTABUP   6 4 6
+  157  [   -]  GETUPVAL   7 10
+  158  [   -]  GETTABLE   6 6 7
+  159  [   -]  GETTABLE   6 6 0
+  160  [   -]  ADD        6 6 2
+  161  [   -]  TEST       6 1
+  162  [   -]  JMP        0 11          ; → 174
+  163  [   -]  GETUPVAL   6 16
+  164  [   -]  GETTABUP   6 15 6
+  165  [   -]  GETUPVAL   7 17
+  166  [   -]  LEN        7 7
+  167  [   -]  CALL       6 2 2
+  168  [   -]  GETUPVAL   7 9
+  169  [   -]  GETTABLE   6 6 7
+  170  [   -]  GETTABUP   6 4 6
+  171  [   -]  GETUPVAL   7 10
+  172  [   -]  GETTABLE   6 6 7
+  173  [   -]  GETTABLE   6 6 0
+  174  [   -]  RETURN     6 2
+  175  [   -]  RETURN     0 1
+constantes:
+  K0	&quot;(%l%a+)(%d+)h(N?)&quot;
+  K1	0
+  K2	&quot;([%l]?)(%u)&quot;
+upvalues:
+  0	?	instack=0 idx=1
+  1	?	instack=0 idx=18
+  2	?	instack=1 idx=33
+  3	?	instack=1 idx=25
+  4	?	instack=1 idx=34
+  5	?	instack=1 idx=24
+  6	?	instack=0 idx=5
+  7	?	instack=1 idx=22
+  8	?	instack=0 idx=3
+  9	?	instack=0 idx=31
+  10	?	instack=1 idx=1
+  11	?	instack=0 idx=9
+  12	?	instack=1 idx=21
+  13	?	instack=1 idx=29
+  14	?	instack=0 idx=43
+  15	?	instack=0 idx=6
+  16	?	instack=0 idx=13
+  17	?	instack=1 idx=3
+  18	?	instack=0 idx=46
+  19	?	instack=1 idx=26
+  20	?	instack=1 idx=10
+  21	?	instack=0 idx=47
+</pre></details><details><summary>função main/2/7/0 · ?:313-321 · 26 instruções</summary><pre>=== função main/2/7/0 · ?:313-321 · 26 instruções ===
+params=2 vararg=0 slots=5 upvalues=3 constantes=2 funções=0
+    1  [   -]  LEN        2 0
+    2  [   -]  LT         0 256 2       ; B=0
+    3  [   -]  JMP        0 2           ; → 6
+    4  [   -]  TESTSET    2 0 1
+    5  [   -]  JMP        0 1           ; → 7
+    6  [   -]  GETUPVAL   2 0
+    7  [   -]  GETUPVAL   3 0
+    8  [   -]  EQ         1 3 2
+    9  [   -]  JMP        0 10          ; → 20
+   10  [   -]  SETUPVAL   2 0
+   11  [   -]  GETUPVAL   3 1
+   12  [   -]  TEST       3 1
+   13  [   -]  JMP        0 1           ; → 15
+   14  [   -]  LOADK      3 1           ; &quot;&quot;
+   15  [   -]  GETTABUP   4 2 0
+   16  [   -]  GETTABLE   4 4 1
+   17  [   -]  CONCAT     3 3 4
+   18  [   -]  SETUPVAL   3 1
+   19  [   -]  RETURN     0 1
+   20  [   -]  GETUPVAL   3 1
+   21  [   -]  GETUPVAL   4 0
+   22  [   -]  GETTABUP   4 2 4
+   23  [   -]  GETTABLE   4 4 1
+   24  [   -]  CONCAT     3 3 4
+   25  [   -]  SETUPVAL   3 1
+   26  [   -]  RETURN     0 1
+constantes:
+  K0	0
+  K1	&quot;&quot;
+upvalues:
+  0	?	instack=1 idx=4
+  1	?	instack=1 idx=5
+  2	?	instack=0 idx=12
+</pre></details><details><summary>função main/3 · ?:336-340 · 11 instruções</summary><pre>=== função main/3 · ?:336-340 · 11 instruções ===
+params=0 vararg=1 slots=3 upvalues=5 constantes=0 funções=0
+    1  [   -]  GETUPVAL   0 2
+    2  [   -]  GETTABUP   0 1 0
+    3  [   -]  GETUPVAL   1 3
+    4  [   -]  GETUPVAL   2 4
+    5  [   -]  CALL       0 3 2
+    6  [   -]  SETUPVAL   0 0
+    7  [   -]  GETUPVAL   0 3
+    8  [   -]  VARARG     1 0
+    9  [   -]  TAILCALL   0 0 0
+   10  [   -]  RETURN     0 0
+   11  [   -]  RETURN     0 1
+upvalues:
+  0	?	instack=1 idx=10
+  1	?	instack=1 idx=100
+  2	?	instack=1 idx=129
+  3	?	instack=1 idx=148
+  4	?	instack=1 idx=11
+</pre></details><details><summary>função main/4 · ?:3-201 · 512 instruções</summary><pre>=== função main/4 · ?:3-201 · 512 instruções ===
+params=0 vararg=1 slots=31 upvalues=2 constantes=84 funções=0
+    1  [   -]  GETUPVAL   0 0
+    2  [   -]  LOADK      1 0           ; 1
+    3  [   -]  LOADK      2 1           ; &quot;fXZIhCfVQZ&quot;
+    4  [   -]  CALL       0 3 2
+    5  [   -]  TEST       0 0
+    6  [   -]  JMP        0 8           ; → 15
+    7  [   -]  GETTABUP   0 1 258       ; C=&quot;lghdyq&quot;
+    8  [   -]  CALL       0 1 2
+    9  [   -]  SELF       0 0 259       ; C=&quot;match&quot;
+   10  [   -]  GETTABUP   2 1 260       ; C=&quot;gJEiBgHiFK2h&quot;
+   11  [   -]  CALL       0 3 2
+   12  [   -]  GETTABUP   1 1 261       ; C=&quot;gBfPRiAfRPgAfVQZiAfQZXZOYLiAfQJgD3h&quot;
+   13  [   -]  EQ         1 0 1
+   14  [   -]  JMP        0 17          ; → 32
+   15  [   -]  GETTABUP   0 1 258       ; C=&quot;lghdyq&quot;
+   16  [   -]  TEST       0 0
+   17  [   -]  JMP        0 12          ; → 30
+   18  [   -]  GETTABUP   0 1 262       ; C=&quot;print&quot;
+   19  [   -]  GETTABUP   1 1 263       ; C=&quot;gQfZOgDfRZiO4h&quot;
+   20  [   -]  GETTABUP   2 1 258       ; C=&quot;lghdyq&quot;
+   21  [   -]  CALL       2 1 2
+   22  [   -]  SELF       2 2 259       ; C=&quot;match&quot;
+   23  [   -]  GETTABUP   4 1 260       ; C=&quot;gJEiBgHiFK2h&quot;
+   24  [   -]  CALL       2 3 2
+   25  [   -]  GETTABUP   3 1 264       ; C=&quot;fIP5h&quot;
+   26  [   -]  GETTABUP   4 1 261       ; C=&quot;gBfPRiAfRPgAfVQZiAfQZXZOYLiAfQJgD3h&quot;
+   27  [   -]  CALL       0 5 2
+   28  [   -]  TEST       0 1
+   29  [   -]  JMP        0 1           ; → 31
+   30  [   -]  LOADNIL    0 0
+   31  [   -]  RETURN     0 2
+   32  [   -]  LOADNIL    0 0
+   33  [   -]  GETTABUP   1 1 265       ; C=&quot;hAFgQViOhDJgXhFiOgVfWWVgBfVgDfQ6h&quot;
+   34  [   -]  LOADNIL    2 0
+   35  [   -]  GETTABUP   3 1 266       ; C=&quot;vqpmvv&quot;
+   36  [   -]  GETTABUP   4 1 267       ; C=&quot;iB7h&quot;
+   37  [   -]  GETTABUP   5 1 258       ; C=&quot;lghdyq&quot;
+   38  [   -]  CALL       5 1 2
+   39  [   -]  SELF       5 5 259       ; C=&quot;match&quot;
+   40  [   -]  GETTABUP   7 1 260       ; C=&quot;gJEiBgHiFK2h&quot;
+   41  [   -]  CALL       5 3 2
+   42  [   -]  GETTABUP   6 1 268       ; C=&quot;iAfMgDfLLHPKY8h&quot;
+   43  [   -]  CONCAT     3 3 6
+   44  [   -]  GETTABUP   4 1 269       ; C=&quot;loadfile&quot;
+   45  [   -]  MOVE       5 3
+   46  [   -]  CALL       4 2 2
+   47  [   -]  TEST       4 0
+   48  [   -]  JMP        0 4           ; → 53
+   49  [   -]  MOVE       5 4
+   50  [   -]  CALL       5 1 2
+   51  [   -]  TESTSET    4 5 1
+   52  [   -]  JMP        0 0           ; → 53
+   53  [   -]  EQ         1 4 1
+   54  [   -]  JMP        0 37          ; → 92
+   55  [   -]  GETTABUP   5 1 270       ; C=&quot;txfqii&quot;
+   56  [   -]  NEWTABLE   6 1 0
+   57  [   -]  GETTABUP   7 1 271       ; C=&quot;gSDfLLHPKYhO9h&quot;
+   58  [   -]  SETLIST    6 1 1
+   59  [   -]  MOVE       7 2
+   60  [   -]  NEWTABLE   8 1 0
+   61  [   -]  GETTABUP   9 1 272       ; C=&quot;fIZEI10h&quot;
+   62  [   -]  SETLIST    8 1 1
+   63  [   -]  CALL       5 4 2
+   64  [   -]  TEST       5 0
+   65  [   -]  JMP        0 3           ; → 69
+   66  [   -]  GETTABLE   6 5 256       ; C=1
+   67  [   -]  EQ         1 6 1
+   68  [   -]  JMP        0 13          ; → 82
+   69  [   -]  TEST       5 0
+   70  [   -]  JMP        0 10          ; → 81
+   71  [   -]  GETTABLE   6 5 256       ; C=1
+   72  [   -]  EQ         1 6 273       ; C=&quot;&quot;
+   73  [   -]  JMP        0 2           ; → 76
+   74  [   -]  TESTSET    2 5 1
+   75  [   -]  JMP        0 4           ; → 80
+   76  [   -]  NEWTABLE   6 1 0
+   77  [   -]  GETTABUP   7 1 274       ; C=&quot;hBfOMJIiOfMgDfLLHPKYiP11h&quot;
+   78  [   -]  SETLIST    6 1 1
+   79  [   -]  MOVE       2 6
+   80  [   -]  JMP        0 1           ; → 82
+   81  [   -]  RETURN     0 1
+   82  [   -]  GETTABLE   6 5 256       ; C=1
+   83  [   -]  EQ         0 6 1
+   84  [   -]  JMP        0 -50         ; → 35
+   85  [   -]  GETTABUP   6 1 275       ; C=&quot;ppoeoo&quot;
+   86  [   -]  GETTABLE   7 5 256       ; C=1
+   87  [   -]  MOVE       8 3
+   88  [   -]  CALL       6 3 2
+   89  [   -]  TESTSET    5 6 1
+   90  [   -]  JMP        0 0           ; → 91
+   91  [   -]  JMP        0 -57         ; → 35
+   92  [   -]  GETTABUP   3 1 276       ; C=&quot;gg&quot;
+   93  [   -]  GETTABUP   4 1 277       ; C=&quot;fMKPRMI12h&quot;
+   94  [   -]  GETTABLE   4 3 4
+   95  [   -]  NEWTABLE   5 5 0
+   96  [   -]  LOADNIL    6 0
+   97  [   -]  GETTABUP   7 1 278       ; C=&quot;bCdWQaRcSeJiOgQfZiDfZOgDAfQZiOhAfVXUiOhHgDfRZKgDbCdWQaRcSeJiOjKhEfKPOZiOgMfVZHhOgJiDhZVPZVgH13h&quot;
+   98  [   -]  GETTABUP   8 1 279       ; C=&quot;gKiDfKgDfF14h&quot;
+   99  [   -]  GETTABUP   9 1 280       ; C=&quot;hHfQVgBfTiOhDDiOhNiOgVU15h&quot;
+  100  [   -]  LOADNIL    10 0
+  101  [   -]  SETLIST    5 5 1
+  102  [   -]  NEWTABLE   6 5 0
+  103  [   -]  LOADK      7 25          ; 0
+  104  [   -]  LOADK      8 26          ; 11
+  105  [   -]  LOADBOOL   9 0 0
+  106  [   -]  LOADBOOL   10 1 0
+  107  [   -]  LOADK      11 26         ; 11
+  108  [   -]  SETLIST    6 5 1
+  109  [   -]  NEWTABLE   7 5 0
+  110  [   -]  GETTABUP   8 1 283       ; C=&quot;fOJRgAfZK16h&quot;
+  111  [   -]  GETTABUP   9 1 283       ; C=&quot;fOJRgAfZK16h&quot;
+  112  [   -]  GETTABUP   10 1 284      ; C=&quot;gBfUZgBfTgAfPE17h&quot;
+  113  [   -]  GETTABUP   11 1 284      ; C=&quot;gBfUZgBfTgAfPE17h&quot;
+  114  [   -]  GETTABUP   12 1 283      ; C=&quot;fOJRgAfZK16h&quot;
+  115  [   -]  SETLIST    7 5 1
+  116  [   -]  CALL       4 4 2
+  117  [   -]  GETTABUP   5 1 285       ; C=&quot;pbtuse&quot;
+  118  [   -]  LOADBOOL   6 0 0
+  119  [   -]  CALL       5 2 1
+  120  [   -]  TEST       4 1
+  121  [   -]  JMP        0 1           ; → 123
+  122  [   -]  RETURN     0 1
+  123  [   -]  GETTABLE   5 4 286       ; C=4
+  124  [   -]  TEST       5 0
+  125  [   -]  JMP        0 6           ; → 132
+  126  [   -]  GETTABUP   5 1 287       ; C=&quot;fVLgMfVLVgAfQZ18h&quot;
+  127  [   -]  GETTABLE   5 3 5
+  128  [   -]  CALL       5 1 2
+  129  [   -]  TEST       5 1
+  130  [   -]  JMP        0 1           ; → 132
+  131  [   -]  JMP        0 -6          ; → 126
+  132  [   -]  GETTABLE   5 4 288       ; C=2
+  133  [   -]  GETTABUP   6 1 289       ; C=&quot;hY19h&quot;
+  134  [   -]  EQ         1 5 6
+  135  [   -]  JMP        0 128         ; → 264
+  136  [   -]  GETTABUP   5 1 285       ; C=&quot;pbtuse&quot;
+  137  [   -]  LOADBOOL   6 0 0
+  138  [   -]  CALL       5 2 1
+  139  [   -]  GETTABUP   5 1 290       ; C=&quot;fLZIgQDfOXZL20h&quot;
+  140  [   -]  GETTABLE   5 3 5
+  141  [   -]  GETTABUP   6 1 291       ; C=&quot;gQhFDBgVUFhJgUVULXVPR21h&quot;
+  142  [   -]  GETTABLE   6 3 6
+  143  [   -]  CALL       5 2 1
+  144  [   -]  GETTABUP   5 1 292       ; C=&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  145  [   -]  GETTABLE   5 3 5
+  146  [   -]  CALL       5 1 1
+  147  [   -]  GETTABUP   5 1 293       ; C=&quot;hEfPOZ23h&quot;
+  148  [   -]  GETTABUP   6 1 294       ; C=&quot;toxntx&quot;
+  149  [   -]  GETTABUP   7 1 295       ; C=&quot;iDhZiChZZUiChSTQiChWXZ24h&quot;
+  150  [   -]  GETTABUP   8 1 296       ; C=&quot;idcysm&quot;
+  151  [   -]  LOADBOOL   9 0 0
+  152  [   -]  GETTABUP   10 1 297      ; C=&quot;tdxxlx&quot;
+  153  [   -]  CALL       6 5 1
+  154  [   -]  GETTABUP   6 1 298       ; C=&quot;fXZIgQfZLJQIL25h&quot;
+  155  [   -]  GETTABLE   6 3 6
+  156  [   -]  GETTABUP   7 1 299       ; C=&quot;fXZIgQfZLJQILhHfPJOI26h&quot;
+  157  [   -]  GETTABLE   7 3 7
+  158  [   -]  CALL       7 1 0
+  159  [   -]  CALL       6 0 2
+  160  [   -]  GETTABUP   7 1 292       ; C=&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  161  [   -]  GETTABLE   7 3 7
+  162  [   -]  CALL       7 1 1
+  163  [   -]  NEWTABLE   7 0 2
+  164  [   -]  SETTABLE   7 300 281     ; B=-566231 C=0
+  165  [   -]  SETTABLE   7 301 281     ; B=-83886 C=0
+  166  [   -]  NEWTABLE   8 0 0
+  167  [   -]  NEWTABLE   9 0 0
+  168  [   -]  GETTABUP   10 1 302      ; C=&quot;next&quot;
+  169  [   -]  MOVE       11 6
+  170  [   -]  LOADNIL    12 0
+  171  [   -]  JMP        0 62          ; → 234
+  172  [   -]  GETTABUP   15 1 303      ; C=&quot;fXZIgMDfQJZL27h&quot;
+  173  [   -]  GETTABLE   15 3 15
+  174  [   -]  NEWTABLE   16 3 0
+  175  [   -]  NEWTABLE   17 0 2
+  176  [   -]  GETTABUP   18 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  177  [   -]  GETTABLE   18 14 18
+  178  [   -]  GETTABUP   19 1 305      ; C=&quot;hYfEhZU43hN&quot;
+  179  [   -]  SUB        18 18 19
+  180  [   -]  SETTABLE   17 306 18     ; B=&quot;address&quot;
+  181  [   -]  GETTABUP   18 1 307      ; C=&quot;gOLShFgFhEgNVQhE29h&quot;
+  182  [   -]  GETTABLE   18 3 18
+  183  [   -]  SETTABLE   17 308 18     ; B=&quot;flags&quot;
+  184  [   -]  NEWTABLE   18 0 2
+  185  [   -]  GETTABUP   19 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  186  [   -]  GETTABLE   19 14 19
+  187  [   -]  GETTABUP   20 1 309      ; C=&quot;hYfEhZY44hN&quot;
+  188  [   -]  SUB        19 19 20
+  189  [   -]  SETTABLE   18 306 19     ; B=&quot;address&quot;
+  190  [   -]  GETTABUP   19 1 307      ; C=&quot;gOLShFgFhEgNVQhE29h&quot;
+  191  [   -]  GETTABLE   19 3 19
+  192  [   -]  SETTABLE   18 308 19     ; B=&quot;flags&quot;
+  193  [   -]  NEWTABLE   19 0 2
+  194  [   -]  GETTABUP   20 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  195  [   -]  GETTABLE   20 14 20
+  196  [   -]  GETTABUP   21 1 310      ; C=&quot;hYfEhYH45hN&quot;
+  197  [   -]  SUB        20 20 21
+  198  [   -]  SETTABLE   19 306 20     ; B=&quot;address&quot;
+  199  [   -]  GETTABUP   20 1 307      ; C=&quot;gOLShFgFhEgNVQhE29h&quot;
+  200  [   -]  GETTABLE   20 3 20
+  201  [   -]  SETTABLE   19 308 20     ; B=&quot;flags&quot;
+  202  [   -]  SETLIST    16 3 1
+  203  [   -]  CALL       15 2 2
+  204  [   -]  GETTABLE   16 15 311     ; C=3
+  205  [   -]  GETTABUP   17 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  206  [   -]  GETTABLE   16 16 17
+  207  [   -]  GETTABLE   17 15 256     ; C=1
+  208  [   -]  GETTABUP   18 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  209  [   -]  GETTABLE   17 17 18
+  210  [   -]  SUB        16 16 17
+  211  [   -]  GETTABLE   17 7 16
+  212  [   -]  TEST       17 0
+  213  [   -]  JMP        0 20          ; → 234
+  214  [   -]  LEN        17 8
+  215  [   -]  ADD        17 17 256     ; C=1
+  216  [   -]  GETTABLE   18 15 256     ; C=1
+  217  [   -]  SETTABLE   8 17 18
+  218  [   -]  LEN        17 8
+  219  [   -]  ADD        17 17 256     ; C=1
+  220  [   -]  GETTABLE   18 15 288     ; C=2
+  221  [   -]  SETTABLE   8 17 18
+  222  [   -]  LEN        17 8
+  223  [   -]  ADD        17 17 256     ; C=1
+  224  [   -]  GETTABLE   18 15 311     ; C=3
+  225  [   -]  SETTABLE   8 17 18
+  226  [   -]  LEN        17 5
+  227  [   -]  LT         0 17 313      ; C=5
+  228  [   -]  JMP        0 5           ; → 234
+  229  [   -]  MOVE       17 5
+  230  [   -]  GETTABUP   18 1 314      ; C=&quot;iOhAgDBfT31h&quot;
+  231  [   -]  CONCAT     17 17 18
+  232  [   -]  TESTSET    5 17 1
+  233  [   -]  JMP        0 0           ; → 234
+  234  [   -]  TFORCALL   10 2
+  235  [   -]  TFORLOOP   12 -64        ; → 172
+  236  [   -]  GETTABUP   10 1 302      ; C=&quot;next&quot;
+  237  [   -]  MOVE       11 8
+  238  [   -]  LOADNIL    12 0
+  239  [   -]  JMP        0 10          ; → 250
+  240  [   -]  GETTABUP   15 1 315      ; C=&quot;fWKZZCZ32h&quot;
+  241  [   -]  SETTABLE   14 15 316     ; C=true
+  242  [   -]  GETTABUP   15 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  243  [   -]  GETTABUP   16 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  244  [   -]  GETTABLE   16 14 16
+  245  [   -]  GETTABLE   17 4 288      ; C=2
+  246  [   -]  GETTABUP   18 1 317      ; C=&quot;hYYYYYY33h&quot;
+  247  [   -]  CONCAT     17 17 18
+  248  [   -]  ADD        16 16 17
+  249  [   -]  SETTABLE   14 15 16
+  250  [   -]  TFORCALL   10 2
+  251  [   -]  TFORLOOP   12 -12        ; → 240
+  252  [   -]  GETTABUP   10 1 318      ; C=&quot;gDfYYgWfVLIhBfIZRL34h&quot;
+  253  [   -]  GETTABLE   10 3 10
+  254  [   -]  MOVE       11 8
+  255  [   -]  CALL       10 2 1
+  256  [   -]  GETTABUP   10 1 319      ; C=&quot;fKZRPGZgWfVLIhBfIZRL35h&quot;
+  257  [   -]  GETTABLE   10 3 10
+  258  [   -]  MOVE       11 8
+  259  [   -]  CALL       10 2 1
+  260  [   -]  GETTABUP   10 1 320      ; C=&quot;fIPgDfLI36h&quot;
+  261  [   -]  GETTABLE   10 3 10
+  262  [   -]  MOVE       11 5
+  263  [   -]  CALL       10 2 1
+  264  [   -]  GETTABLE   5 4 311       ; C=3
+  265  [   -]  TEST       5 0
+  266  [   -]  JMP        0 70          ; → 337
+  267  [   -]  GETTABUP   5 1 285       ; C=&quot;pbtuse&quot;
+  268  [   -]  LOADBOOL   6 0 0
+  269  [   -]  CALL       5 2 1
+  270  [   -]  GETTABUP   5 1 321       ; C=&quot;ofnqtu&quot;
+  271  [   -]  GETTABUP   6 1 291       ; C=&quot;gQhFDBgVUFhJgUVULXVPR21h&quot;
+  272  [   -]  GETTABLE   6 3 6
+  273  [   -]  CALL       5 2 1
+  274  [   -]  GETTABUP   5 1 294       ; C=&quot;toxntx&quot;
+  275  [   -]  GETTABUP   6 1 322       ; C=&quot;hUiChVZYiChQYViChXQQiChURWiChWTViChTWX37h&quot;
+  276  [   -]  GETTABUP   7 1 323       ; C=&quot;zhyhnq&quot;
+  277  [   -]  LOADBOOL   8 0 0
+  278  [   -]  GETTABUP   9 1 297       ; C=&quot;tdxxlx&quot;
+  279  [   -]  CALL       5 5 1
+  280  [   -]  GETTABUP   5 1 324       ; C=&quot;oimcon&quot;
+  281  [   -]  GETTABUP   6 1 325       ; C=&quot;qoyknd&quot;
+  282  [   -]  CALL       6 1 0
+  283  [   -]  CALL       5 0 2
+  284  [   -]  GETTABUP   6 1 326       ; C=&quot;nwsabl&quot;
+  285  [   -]  CALL       6 1 1
+  286  [   -]  GETTABUP   6 1 302       ; C=&quot;next&quot;
+  287  [   -]  MOVE       7 5
+  288  [   -]  LOADNIL    8 0
+  289  [   -]  JMP        0 9           ; → 299
+  290  [   -]  GETTABUP   11 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  291  [   -]  GETTABUP   12 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  292  [   -]  GETTABLE   12 10 12
+  293  [   -]  GETTABUP   13 1 327      ; C=&quot;hYfEhQ46hN&quot;
+  294  [   -]  SUB        12 12 13
+  295  [   -]  SETTABLE   10 11 12
+  296  [   -]  GETTABUP   11 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  297  [   -]  GETTABUP   12 1 296      ; C=&quot;idcysm&quot;
+  298  [   -]  SETTABLE   10 11 12
+  299  [   -]  TFORCALL   6 2
+  300  [   -]  TFORLOOP   8 -11         ; → 290
+  301  [   -]  GETTABUP   6 1 329       ; C=&quot;gtbikp&quot;
+  302  [   -]  MOVE       7 5
+  303  [   -]  CALL       6 2 2
+  304  [   -]  MOVE       5 6
+  305  [   -]  NEWTABLE   6 1 2
+  306  [   -]  LOADK      7 74          ; 9
+  307  [   -]  SETTABLE   6 330 331     ; B=9 C=14
+  308  [   -]  SETTABLE   6 331 330     ; B=14 C=9
+  309  [   -]  SETLIST    6 1 1
+  310  [   -]  GETTABLE   7 5 256       ; C=1
+  311  [   -]  GETTABUP   8 1 312       ; C=&quot;fGgDfQJZ30h&quot;
+  312  [   -]  GETTABLE   9 5 256       ; C=1
+  313  [   -]  GETTABUP   10 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  314  [   -]  GETTABLE   9 9 10
+  315  [   -]  GETTABLE   9 6 9
+  316  [   -]  SETTABLE   7 8 9
+  317  [   -]  GETTABLE   7 5 256       ; C=1
+  318  [   -]  GETTABUP   8 1 315       ; C=&quot;fWKZZCZ32h&quot;
+  319  [   -]  SETTABLE   7 8 316       ; C=true
+  320  [   -]  GETTABUP   7 1 332       ; C=&quot;jqzgou&quot;
+  321  [   -]  MOVE       8 5
+  322  [   -]  CALL       7 2 1
+  323  [   -]  GETTABUP   7 1 333       ; C=&quot;qymhxi&quot;
+  324  [   -]  MOVE       8 5
+  325  [   -]  CALL       7 2 1
+  326  [   -]  GETTABUP   7 1 334       ; C=&quot;zzyevv&quot;
+  327  [   -]  GETTABLE   8 5 256       ; C=1
+  328  [   -]  GETTABUP   9 1 312       ; C=&quot;fGgDfQJZ30h&quot;
+  329  [   -]  GETTABLE   8 8 9
+  330  [   -]  EQ         0 8 330       ; C=9
+  331  [   -]  JMP        0 3           ; → 335
+  332  [   -]  GETTABUP   8 1 335       ; C=&quot;gKiDgQDfFiOhJgBfIVGZ39h&quot;
+  333  [   -]  TEST       8 1
+  334  [   -]  JMP        0 1           ; → 336
+  335  [   -]  GETTABUP   8 1 336       ; C=&quot;gKiDgQDfFiOgVfWW40h&quot;
+  336  [   -]  CALL       7 2 1
+  337  [   -]  GETTABLE   5 4 313       ; C=5
+  338  [   -]  TEST       5 0
+  339  [   -]  JMP        0 169         ; → 509
+  340  [   -]  GETTABUP   5 1 285       ; C=&quot;pbtuse&quot;
+  341  [   -]  LOADBOOL   6 0 0
+  342  [   -]  CALL       5 2 1
+  343  [   -]  GETTABUP   5 1 290       ; C=&quot;fLZIgQDfOXZL20h&quot;
+  344  [   -]  GETTABLE   5 3 5
+  345  [   -]  GETTABUP   6 1 291       ; C=&quot;gQhFDBgVUFhJgUVULXVPR21h&quot;
+  346  [   -]  GETTABLE   6 3 6
+  347  [   -]  CALL       5 2 1
+  348  [   -]  GETTABUP   5 1 292       ; C=&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  349  [   -]  GETTABLE   5 3 5
+  350  [   -]  CALL       5 1 1
+  351  [   -]  NEWTABLE   5 0 2
+  352  [   -]  SETTABLE   5 301 281     ; B=-83886 C=0
+  353  [   -]  SETTABLE   5 300 281     ; B=-566231 C=0
+  354  [   -]  GETTABUP   6 1 294       ; C=&quot;toxntx&quot;
+  355  [   -]  GETTABUP   7 1 295       ; C=&quot;iDhZiChZZUiChSTQiChWXZ24h&quot;
+  356  [   -]  GETTABUP   8 1 296       ; C=&quot;idcysm&quot;
+  357  [   -]  LOADBOOL   9 0 0
+  358  [   -]  GETTABUP   10 1 297      ; C=&quot;tdxxlx&quot;
+  359  [   -]  CALL       6 5 1
+  360  [   -]  GETTABUP   6 1 298       ; C=&quot;fXZIgQfZLJQIL25h&quot;
+  361  [   -]  GETTABLE   6 3 6
+  362  [   -]  GETTABUP   7 1 299       ; C=&quot;fXZIgQfZLJQILhHfPJOI26h&quot;
+  363  [   -]  GETTABLE   7 3 7
+  364  [   -]  CALL       7 1 0
+  365  [   -]  CALL       6 0 2
+  366  [   -]  GETTABUP   7 1 292       ; C=&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  367  [   -]  GETTABLE   7 3 7
+  368  [   -]  CALL       7 1 1
+  369  [   -]  NEWTABLE   7 0 0
+  370  [   -]  NEWTABLE   8 0 0
+  371  [   -]  GETTABUP   9 1 302       ; C=&quot;next&quot;
+  372  [   -]  MOVE       10 6
+  373  [   -]  LOADNIL    11 0
+  374  [   -]  JMP        0 121         ; → 496
+  375  [   -]  GETTABUP   14 1 303      ; C=&quot;fXZIgMDfQJZL27h&quot;
+  376  [   -]  GETTABLE   14 3 14
+  377  [   -]  NEWTABLE   15 3 0
+  378  [   -]  NEWTABLE   16 0 2
+  379  [   -]  GETTABUP   17 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  380  [   -]  GETTABLE   17 13 17
+  381  [   -]  GETTABUP   18 1 305      ; C=&quot;hYfEhZU43hN&quot;
+  382  [   -]  UNM        18 18
+  383  [   -]  ADD        17 17 18
+  384  [   -]  SETTABLE   16 306 17     ; B=&quot;address&quot;
+  385  [   -]  GETTABUP   17 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  386  [   -]  GETTABLE   17 13 17
+  387  [   -]  SETTABLE   16 308 17     ; B=&quot;flags&quot;
+  388  [   -]  NEWTABLE   17 0 2
+  389  [   -]  GETTABUP   18 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  390  [   -]  GETTABLE   18 13 18
+  391  [   -]  GETTABUP   19 1 309      ; C=&quot;hYfEhZY44hN&quot;
+  392  [   -]  UNM        19 19
+  393  [   -]  ADD        18 18 19
+  394  [   -]  SETTABLE   17 306 18     ; B=&quot;address&quot;
+  395  [   -]  GETTABUP   18 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  396  [   -]  GETTABLE   18 13 18
+  397  [   -]  SETTABLE   17 308 18     ; B=&quot;flags&quot;
+  398  [   -]  NEWTABLE   18 0 2
+  399  [   -]  GETTABUP   19 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  400  [   -]  GETTABLE   19 13 19
+  401  [   -]  GETTABUP   20 1 310      ; C=&quot;hYfEhYH45hN&quot;
+  402  [   -]  UNM        20 20
+  403  [   -]  ADD        19 19 20
+  404  [   -]  SETTABLE   18 306 19     ; B=&quot;address&quot;
+  405  [   -]  GETTABUP   19 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  406  [   -]  GETTABLE   19 13 19
+  407  [   -]  SETTABLE   18 308 19     ; B=&quot;flags&quot;
+  408  [   -]  SETLIST    15 3 1
+  409  [   -]  CALL       14 2 2
+  410  [   -]  GETTABLE   15 14 311     ; C=3
+  411  [   -]  GETTABUP   16 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  412  [   -]  GETTABLE   15 15 16
+  413  [   -]  GETTABLE   16 14 256     ; C=1
+  414  [   -]  GETTABUP   17 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  415  [   -]  GETTABLE   16 16 17
+  416  [   -]  SUB        15 15 16
+  417  [   -]  GETTABLE   15 5 15
+  418  [   -]  TEST       15 0
+  419  [   -]  JMP        0 76          ; → 496
+  420  [   -]  GETTABLE   15 14 256     ; C=1
+  421  [   -]  GETTABUP   16 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  422  [   -]  GETTABLE   15 15 16
+  423  [   -]  GETTABLE   15 8 15
+  424  [   -]  TEST       15 1
+  425  [   -]  JMP        0 70          ; → 496
+  426  [   -]  GETTABLE   15 14 256     ; C=1
+  427  [   -]  GETTABUP   16 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  428  [   -]  GETTABLE   15 15 16
+  429  [   -]  SETTABLE   8 15 281      ; C=0
+  430  [   -]  GETTABUP   15 1 294      ; C=&quot;toxntx&quot;
+  431  [   -]  GETTABLE   16 14 256     ; C=1
+  432  [   -]  GETTABUP   17 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  433  [   -]  GETTABLE   16 16 17
+  434  [   -]  GETTABUP   17 1 296      ; C=&quot;idcysm&quot;
+  435  [   -]  LOADBOOL   18 0 0
+  436  [   -]  GETTABUP   19 1 297      ; C=&quot;tdxxlx&quot;
+  437  [   -]  CALL       15 5 1
+  438  [   -]  GETTABUP   15 1 298      ; C=&quot;fXZIgQfZLJQIL25h&quot;
+  439  [   -]  GETTABLE   15 3 15
+  440  [   -]  GETTABUP   16 1 299      ; C=&quot;fXZIgQfZLJQILhHfPJOI26h&quot;
+  441  [   -]  GETTABLE   16 3 16
+  442  [   -]  CALL       16 1 0
+  443  [   -]  CALL       15 0 2
+  444  [   -]  GETTABUP   16 1 292      ; C=&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  445  [   -]  GETTABLE   16 3 16
+  446  [   -]  CALL       16 1 1
+  447  [   -]  GETTABUP   16 1 302      ; C=&quot;next&quot;
+  448  [   -]  MOVE       17 15
+  449  [   -]  LOADNIL    18 0
+  450  [   -]  JMP        0 43          ; → 494
+  451  [   -]  GETTABUP   21 1 303      ; C=&quot;fXZIgMDfQJZL27h&quot;
+  452  [   -]  GETTABLE   21 3 21
+  453  [   -]  NEWTABLE   22 3 0
+  454  [   -]  MOVE       23 20
+  455  [   -]  NEWTABLE   24 0 2
+  456  [   -]  GETTABUP   25 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  457  [   -]  GETTABLE   25 20 25
+  458  [   -]  GETTABUP   26 1 337      ; C=&quot;hYfEhU47hN&quot;
+  459  [   -]  ADD        25 25 26
+  460  [   -]  SETTABLE   24 306 25     ; B=&quot;address&quot;
+  461  [   -]  GETTABUP   25 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  462  [   -]  GETTABLE   25 13 25
+  463  [   -]  SETTABLE   24 308 25     ; B=&quot;flags&quot;
+  464  [   -]  NEWTABLE   25 0 2
+  465  [   -]  GETTABUP   26 1 304      ; C=&quot;gDfYYKZLL28h&quot;
+  466  [   -]  GETTABLE   26 20 26
+  467  [   -]  GETTABUP   27 1 327      ; C=&quot;hYfEhQ46hN&quot;
+  468  [   -]  ADD        26 26 27
+  469  [   -]  SETTABLE   25 306 26     ; B=&quot;address&quot;
+  470  [   -]  GETTABUP   26 1 328      ; C=&quot;fWQgDfXL38h&quot;
+  471  [   -]  GETTABLE   26 13 26
+  472  [   -]  SETTABLE   25 308 26     ; B=&quot;flags&quot;
+  473  [   -]  SETLIST    22 3 1
+  474  [   -]  CALL       21 2 2
+  475  [   -]  GETTABUP   22 1 302      ; C=&quot;next&quot;
+  476  [   -]  MOVE       23 21
+  477  [   -]  LOADNIL    24 0
+  478  [   -]  JMP        0 13          ; → 492
+  479  [   -]  GETTABUP   27 1 315      ; C=&quot;fWKZZCZ32h&quot;
+  480  [   -]  SETTABLE   26 27 316     ; C=true
+  481  [   -]  GETTABUP   27 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  482  [   -]  GETTABUP   28 1 312      ; C=&quot;fGgDfQJZ30h&quot;
+  483  [   -]  GETTABLE   28 26 28
+  484  [   -]  GETTABLE   29 4 313      ; C=5
+  485  [   -]  GETTABUP   30 1 317      ; C=&quot;hYYYYYY33h&quot;
+  486  [   -]  CONCAT     29 29 30
+  487  [   -]  ADD        28 28 29
+  488  [   -]  SETTABLE   26 27 28
+  489  [   -]  LEN        27 7
+  490  [   -]  ADD        27 27 256     ; C=1
+  491  [   -]  SETTABLE   7 27 26
+  492  [   -]  TFORCALL   22 2
+  493  [   -]  TFORLOOP   24 -15        ; → 479
+  494  [   -]  TFORCALL   16 2
+  495  [   -]  TFORLOOP   18 -45        ; → 451
+  496  [   -]  TFORCALL   9 2
+  497  [   -]  TFORLOOP   11 -123       ; → 375
+  498  [   -]  GETTABUP   9 1 318       ; C=&quot;gDfYYgWfVLIhBfIZRL34h&quot;
+  499  [   -]  GETTABLE   9 3 9
+  500  [   -]  MOVE       10 7
+  501  [   -]  CALL       9 2 1
+  502  [   -]  GETTABUP   9 1 333       ; C=&quot;qymhxi&quot;
+  503  [   -]  MOVE       10 7
+  504  [   -]  CALL       9 2 1
+  505  [   -]  GETTABUP   9 1 338       ; C=&quot;fQPgDfYgQfZLJQIL41h&quot;
+  506  [   -]  GETTABLE   9 3 9
+  507  [   -]  MOVE       10 7
+  508  [   -]  CALL       9 2 1
+  509  [   -]  GETTABUP   5 1 262       ; C=&quot;print&quot;
+  510  [   -]  GETTABUP   6 1 339       ; C=&quot;gMfZKLVPOiOhZZiAhRiAhY42h&quot;
+  511  [   -]  CALL       5 2 1
+  512  [   -]  RETURN     0 1
+constantes:
+  K0	1
+  K1	&quot;fXZIhCfVQZ&quot;
+  K2	&quot;lghdyq&quot;
+  K3	&quot;match&quot;
+  K4	&quot;gJEiBgHiFK2h&quot;
+  K5	&quot;gBfPRiAfRPgAfVQZiAfQZXZOYLiAfQJgD3h&quot;
+  K6	&quot;print&quot;
+  K7	&quot;gQfZOgDfRZiO4h&quot;
+  K8	&quot;fIP5h&quot;
+  K9	&quot;hAFgQViOhDJgXhFiOgVfWWVgBfVgDfQ6h&quot;
+  K10	&quot;vqpmvv&quot;
+  K11	&quot;iB7h&quot;
+  K12	&quot;iAfMgDfLLHPKY8h&quot;
+  K13	&quot;loadfile&quot;
+  K14	&quot;txfqii&quot;
+  K15	&quot;gSDfLLHPKYhO9h&quot;
+  K16	&quot;fIZEI10h&quot;
+  K17	&quot;&quot;
+  K18	&quot;hBfOMJIiOfMgDfLLHPKYiP11h&quot;
+  K19	&quot;ppoeoo&quot;
+  K20	&quot;gg&quot;
+  K21	&quot;fMKPRMI12h&quot;
+  K22	&quot;bCdWQaRcSeJiOgQfZiDfZOgDAfQZiOhAfVXUiOhHgDfRZKgDbCdWQaRcSeJiOjKhEfKPOZiOgMfVZHhOgJiDhZVPZVgH13h&quot;
+  K23	&quot;gKiDfKgDfF14h&quot;
+  K24	&quot;hHfQVgBfTiOhDDiOhNiOgVU15h&quot;
+  K25	0
+  K26	11
+  K27	&quot;fOJRgAfZK16h&quot;
+  K28	&quot;gBfUZgBfTgAfPE17h&quot;
+  K29	&quot;pbtuse&quot;
+  K30	4
+  K31	&quot;fVLgMfVLVgAfQZ18h&quot;
+  K32	2
+  K33	&quot;hY19h&quot;
+  K34	&quot;fLZIgQDfOXZL20h&quot;
+  K35	&quot;gQhFDBgVUFhJgUVULXVPR21h&quot;
+  K36	&quot;gBfQZgDfKgQfZLJQIL22h&quot;
+  K37	&quot;hEfPOZ23h&quot;
+  K38	&quot;toxntx&quot;
+  K39	&quot;iDhZiChZZUiChSTQiChWXZ24h&quot;
+  K40	&quot;idcysm&quot;
+  K41	&quot;tdxxlx&quot;
+  K42	&quot;fXZIgQfZLJQIL25h&quot;
+  K43	&quot;fXZIgQfZLJQILhHfPJOI26h&quot;
+  K44	-566231
+  K45	-83886
+  K46	&quot;next&quot;
+  K47	&quot;fXZIgMDfQJZL27h&quot;
+  K48	&quot;gDfYYKZLL28h&quot;
+  K49	&quot;hYfEhZU43hN&quot;
+  K50	&quot;address&quot;
+  K51	&quot;gOLShFgFhEgNVQhE29h&quot;
+  K52	&quot;flags&quot;
+  K53	&quot;hYfEhZY44hN&quot;
+  K54	&quot;hYfEhYH45hN&quot;
+  K55	3
+  K56	&quot;fGgDfQJZ30h&quot;
+  K57	5
+  K58	&quot;iOhAgDBfT31h&quot;
+  K59	&quot;fWKZZCZ32h&quot;
+  K60	true
+  K61	&quot;hYYYYYY33h&quot;
+  K62	&quot;gDfYYgWfVLIhBfIZRL34h&quot;
+  K63	&quot;fKZRPGZgWfVLIhBfIZRL35h&quot;
+  K64	&quot;fIPgDfLI36h&quot;
+  K65	&quot;ofnqtu&quot;
+  K66	&quot;hUiChVZYiChQYViChXQQiChURWiChWTViChTWX37h&quot;
+  K67	&quot;zhyhnq&quot;
+  K68	&quot;oimcon&quot;
+  K69	&quot;qoyknd&quot;
+  K70	&quot;nwsabl&quot;
+  K71	&quot;hYfEhQ46hN&quot;
+  K72	&quot;fWQgDfXL38h&quot;
+  K73	&quot;gtbikp&quot;
+  K74	9
+  K75	14
+  K76	&quot;jqzgou&quot;
+  K77	&quot;qymhxi&quot;
+  K78	&quot;zzyevv&quot;
+  K79	&quot;gKiDgQDfFiOhJgBfIVGZ39h&quot;
+  K80	&quot;gKiDgQDfFiOgVfWW40h&quot;
+  K81	&quot;hYfEhU47hN&quot;
+  K82	&quot;fQPgDfYgQfZLJQIL41h&quot;
+  K83	&quot;gMfZKLVPOiOhZZiAhRiAhY42h&quot;
+upvalues:
+  0	?	instack=1 idx=3
+  1	?	instack=0 idx=0</pre></details>
+</main></body></html>
